@@ -2220,7 +2220,7 @@ netdev_dpdk_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
 
     nb_rx = rte_eth_rx_burst(rx->port_id, rxq->queue_id,
                              (struct rte_mbuf **) batch->packets,
-                             32);
+                             NETDEV_MAX_BURST);
     if (!nb_rx) {
         return EAGAIN;
     }
@@ -2244,7 +2244,7 @@ netdev_dpdk_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
     dp_packet_batch_init_packet_fields(batch);
 
     if (qfill) {
-        if (nb_rx == 32) {
+        if (nb_rx == NETDEV_MAX_BURST) {
             *qfill = rte_eth_rx_queue_count(rx->port_id, rxq->queue_id);
         } else {
             *qfill = 0;
