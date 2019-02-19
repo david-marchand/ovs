@@ -736,7 +736,7 @@ dp_packet_reset_packet(struct dp_packet *b, int off)
     dp_packet_reset_offsets(b);
 }
 
-enum { NETDEV_MAX_BURST = 32 }; /* Maximum number packets in a batch. */
+enum { NETDEV_MAX_BURST = 64 }; /* Maximum number packets in a batch. */
 
 struct dp_packet_batch {
     size_t count;
