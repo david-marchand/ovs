@@ -5390,8 +5390,11 @@ pmd_thread_main(void *f_)
     int poll_cnt;
     int i;
     int process_packets = 0;
-    uint64_t last_reload = 0;
-    uint64_t now;
+    uint64_t end_polling = 0;
+    uint64_t start_polling;
+    uint64_t start_reload;
+    uint64_t before_wait;
+    uint64_t after_wait;
 
     poll_list = NULL;
 
@@ -5402,6 +5405,7 @@ pmd_thread_main(void *f_)
     poll_cnt = pmd_load_queues_and_ports(pmd, &poll_list);
     dfc_cache_init(&pmd->flow_cache);
 reload:
+    start_reload = rte_rdtsc();
     pmd_alloc_static_tx_qid(pmd);
 
     atomic_count_init(&pmd->pmd_overloaded, 0);
@@ -5415,6 +5419,7 @@ reload:
        dp_netdev_rxq_set_cycles(poll_list[i].rxq, RXQ_CYCLES_PROC_CURR, 0);
     }
 
+    before_wait = rte_rdtsc();
     if (!poll_cnt) {
         while (seq_read(pmd->reload_seq) == pmd->last_reload_seq) {
             seq_wait(pmd->reload_seq, pmd->last_reload_seq);
@@ -5422,17 +5427,18 @@ reload:
         }
         lc = UINT_MAX;
     }
+    after_wait = rte_rdtsc();
 
     pmd->intrvl_tsc_prev = 0;
     atomic_store_relaxed(&pmd->intrvl_cycles, 0);
     cycles_counter_update(s);
     /* Protect pmd stats from external clearing while polling. */
     ovs_mutex_lock(&pmd->perf_stats.stats_mutex);
-    now = rte_rdtsc();
-    if (last_reload) {
-        VLOG_INFO("last reload %"PRIu64" cycles ago\n", now - last_reload);
+    start_polling = rte_rdtsc();
+    if (!end_polling) {
+        end_polling = start_reload;
     }
-
+    VLOG_INFO("EP -> R %8.8" PRIu64 ", R -> W %8.8" PRIu64 ", W %8.8" PRIu64 ", W -> SP %8.8" PRIu64 ", Total %8.8" PRIu64 ", poll_cnt=%d\n", start_reload - end_polling, before_wait - start_reload, after_wait - before_wait, start_polling - after_wait, start_polling - end_polling, poll_cnt);
     for (;;) {
         uint64_t rx_packets = 0, tx_packets = 0;
 
@@ -5452,6 +5458,7 @@ reload:
                                            poll_list[i].port_no);
             rx_packets += process_packets;
         }
+        end_polling = rte_rdtsc();
 
         if (!rx_packets) {
             /* We didn't receive anything in the process loop.
@@ -5480,7 +5487,6 @@ reload:
         pmd_perf_end_iteration(s, rx_packets, tx_packets,
                                pmd_perf_metrics_enabled(pmd));
     }
-    last_reload = rte_rdtsc();
     ovs_mutex_unlock(&pmd->perf_stats.stats_mutex);
 
     poll_cnt = pmd_load_queues_and_ports(pmd, &poll_list);
