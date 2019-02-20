@@ -6639,9 +6639,11 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
                 continue;
             }
 
+            uint64_t before = rte_rdtsc();
             int error = handle_packet_upcall(pmd, packet, keys[i],
                                              &actions, &put_actions);
 
+            VLOG_INFO("upcall took %" PRIu64 " cycles\n", rte_rdtsc() - before);
             if (OVS_UNLIKELY(error)) {
                 upcall_fail_cnt++;
             } else {
