@@ -5390,6 +5390,8 @@ pmd_thread_main(void *f_)
     int poll_cnt;
     int i;
     int process_packets = 0;
+    uint64_t last_reload = 0;
+    uint64_t now;
 
     poll_list = NULL;
 
@@ -5426,6 +5428,11 @@ reload:
     cycles_counter_update(s);
     /* Protect pmd stats from external clearing while polling. */
     ovs_mutex_lock(&pmd->perf_stats.stats_mutex);
+    now = rte_rdtsc();
+    if (last_reload) {
+        VLOG_INFO("last reload %"PRIu64" cycles ago\n", now - last_reload);
+    }
+
     for (;;) {
         uint64_t rx_packets = 0, tx_packets = 0;
 
@@ -5473,6 +5480,7 @@ reload:
         pmd_perf_end_iteration(s, rx_packets, tx_packets,
                                pmd_perf_metrics_enabled(pmd));
     }
+    last_reload = rte_rdtsc();
     ovs_mutex_unlock(&pmd->perf_stats.stats_mutex);
 
     poll_cnt = pmd_load_queues_and_ports(pmd, &poll_list);
