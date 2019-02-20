@@ -726,8 +726,9 @@ struct dp_netdev_pmd_thread {
     atomic_count pmd_overloaded;
 
     struct {
-        uint64_t enter_polling;
-        uint64_t quit_polling;
+        unsigned int index;
+        uint64_t before[4];
+        uint64_t after[4];
     } cycles;
 
     /* Set to true if the pmd thread needs to be reloaded. */
@@ -4655,17 +4656,19 @@ reload_affected_pmds(struct dp_netdev *dp)
         }
     }
     CMAP_FOR_EACH (pmd, node, &dp->poll_threads) {
-        uint64_t quit_polling;
+        unsigned int index = pmd->cycles.index;
+        unsigned int i;
 
         if (pmd->core_id == NON_PMD_CORE_ID) {
             continue;
         }
-        atomic_read_relaxed(&pmd->cycles.quit_polling, &quit_polling);
-        if (quit_polling)  {
-            uint64_t enter_polling;
-
-            atomic_read_relaxed(&pmd->cycles.enter_polling, &enter_polling);
-            VLOG_INFO("core%u: last reload took %" PRIu64 " cycles (%" PRIu64 ", %" PRIu64 ")\n", pmd->core_id, enter_polling - quit_polling, enter_polling, quit_polling);
+        for (i = 0; i < ARRAY_SIZE(pmd->cycles.before); i++) {
+            if (pmd->cycles.before[index] && pmd->cycles.after[index]) {
+                VLOG_INFO("core%u: last polling %u %" PRIu64 " cycles ago\n", pmd->core_id, index, pmd->cycles.before[index] - pmd->cycles.after[index]);
+            }
+            if (++index >= ARRAY_SIZE(pmd->cycles.before)) {
+                index = 0;
+            }
         }
     }
 }
@@ -5419,6 +5422,7 @@ pmd_thread_main(void *f_)
     poll_cnt = pmd_load_queues_and_ports(pmd, &poll_list);
     dfc_cache_init(&pmd->flow_cache);
     memset(&pmd->cycles, 0, sizeof(pmd->cycles));
+    pmd->cycles.index = ARRAY_SIZE(pmd->cycles.before) - 1;
 reload:
     pmd_alloc_static_tx_qid(pmd);
 
@@ -5446,7 +5450,11 @@ reload:
     cycles_counter_update(s);
     /* Protect pmd stats from external clearing while polling. */
     ovs_mutex_lock(&pmd->perf_stats.stats_mutex);
-    atomic_store_relaxed(&pmd->cycles.enter_polling, rte_rdtsc());
+    pmd->cycles.before[pmd->cycles.index] = rte_rdtsc();
+    if (++pmd->cycles.index >= ARRAY_SIZE(pmd->cycles.before)) {
+        pmd->cycles.index = 0;
+    }
+    pmd->cycles.after[pmd->cycles.index] = 0;
     for (;;) {
         uint64_t rx_packets = 0, tx_packets = 0;
 
@@ -5494,7 +5502,7 @@ reload:
         pmd_perf_end_iteration(s, rx_packets, tx_packets,
                                pmd_perf_metrics_enabled(pmd));
     }
-    atomic_store_relaxed(&pmd->cycles.quit_polling, rte_rdtsc());
+    pmd->cycles.after[pmd->cycles.index] = rte_rdtsc();
     ovs_mutex_unlock(&pmd->perf_stats.stats_mutex);
 
     poll_cnt = pmd_load_queues_and_ports(pmd, &poll_list);
