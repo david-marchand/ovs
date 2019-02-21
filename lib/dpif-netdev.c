@@ -725,6 +725,8 @@ struct dp_netdev_pmd_thread {
     uint64_t prev_stats[PMD_N_STATS];
     atomic_count pmd_overloaded;
 
+    uint64_t last_upcall;
+    uint64_t plop;
     /* Set to true if the pmd thread needs to be reloaded. */
     bool need_reload;
 };
@@ -5400,6 +5402,10 @@ pmd_thread_main(void *f_)
     poll_cnt = pmd_load_queues_and_ports(pmd, &poll_list);
     dfc_cache_init(&pmd->flow_cache);
 reload:
+    if (pmd->last_upcall) {
+        VLOG_INFO("pmd->last_upcall=%"PRIu64", pmd->plop=%"PRIu64"\n", pmd->last_upcall, pmd->plop);
+        pmd->last_upcall = 0;
+    }
     pmd_alloc_static_tx_qid(pmd);
 
     atomic_count_init(&pmd->pmd_overloaded, 0);
@@ -6158,8 +6164,9 @@ dp_netdev_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet_,
         ds_destroy(&ds);
     }
 
-    return dp->upcall_cb(packet_, flow, ufid, pmd->core_id, type, userdata,
+    int ret = dp->upcall_cb(packet_, flow, ufid, pmd->core_id, type, userdata,
                          actions, wc, put_actions, dp->upcall_aux);
+    return ret;
 }
 
 static inline uint32_t
@@ -6642,8 +6649,7 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
             uint64_t before = rte_rdtsc();
             int error = handle_packet_upcall(pmd, packet, keys[i],
                                              &actions, &put_actions);
-
-            VLOG_INFO("upcall took %" PRIu64 " cycles\n", rte_rdtsc() - before);
+            pmd->last_upcall = rte_rdtsc() - before;
             if (OVS_UNLIKELY(error)) {
                 upcall_fail_cnt++;
             } else {
