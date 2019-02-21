@@ -1306,10 +1306,8 @@ upcall_cb(const struct dp_packet *packet, const struct flow *flow, ovs_u128 *ufi
 
     atomic_read_relaxed(&enable_megaflows, &megaflow);
 
-    uint64_t before = rte_rdtsc();
     error = upcall_receive(&upcall, udpif->backer, packet, type, userdata,
                            flow, 0, ufid, pmd_id);
-    pmd->plop = rte_rdtsc() - before;
     if (error) {
         return error;
     }
