@@ -4245,7 +4245,7 @@ dp_netdev_process_rxq_port(struct dp_netdev_pmd_thread *pmd,
     dp_packet_batch_init(&batch);
 
     /* Fetch the rx queue length only for vhostuser ports. */
-    if (pmd_perf_metrics_enabled(pmd) && rxq->is_vhost) {
+    if (rxq->is_vhost) {
         qlen_p = &rem_qlen;
     }
 
@@ -4255,6 +4255,8 @@ dp_netdev_process_rxq_port(struct dp_netdev_pmd_thread *pmd,
         *recirc_depth_get() = 0;
         pmd_thread_ctx_time_update(pmd);
         batch_cnt = batch.count;
+        if (rem_qlen >= 256)
+            VLOG_INFO("rem_qlen=%d\n", rem_qlen);
         if (pmd_perf_metrics_enabled(pmd)) {
             /* Update batch histogram. */
             s->current.batches++;
