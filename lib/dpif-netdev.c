@@ -725,6 +725,15 @@ struct dp_netdev_pmd_thread {
     uint64_t prev_stats[PMD_N_STATS];
     atomic_count pmd_overloaded;
 
+#define PMD_SAMPLES_COUNT 8
+#define UPCALL_SAMPLES_COUNT 8
+    uint64_t reload_at[PMD_SAMPLES_COUNT];
+    uint64_t start_polling_at[PMD_SAMPLES_COUNT];
+    uint64_t end_polling_at[PMD_SAMPLES_COUNT];
+    uint64_t upcall_duration[PMD_SAMPLES_COUNT][UPCALL_SAMPLES_COUNT];
+    uint64_t upcall_count[PMD_SAMPLES_COUNT];
+    uint8_t reload_index;
+
     /* Set to true if the pmd thread needs to be reloaded. */
     bool need_reload;
 };
@@ -1139,10 +1148,19 @@ pmd_info_show_rxq(struct ds *reply, struct dp_netdev_pmd_thread *pmd)
         uint64_t total_cycles = 0;
 
         ds_put_format(reply,
-                      "pmd thread numa_id %d core_id %u:\n  isolated : %s\n",
+                      "pmd thread numa_id %d core_id %u:\n  isolated: %s\n",
                       pmd->numa_id, pmd->core_id, (pmd->isolated)
                                                   ? "true" : "false");
 
+        for (unsigned int i = 0; i < ARRAY_SIZE(pmd->reload_at); i++) {
+            ds_put_format(reply, "%u,%"PRIu64",%"PRIu64",%"PRIu64,
+                          i, pmd->reload_at[i], pmd->start_polling_at[i],
+                          pmd->end_polling_at[i]);
+            for (unsigned int j = 0; j < pmd->upcall_count[i]; j++) {
+                ds_put_format(reply, ",%"PRIu64, pmd->upcall_duration[i][j]);
+            }
+            ds_put_format(reply, "\n");
+        }
         ovs_mutex_lock(&pmd->port_mutex);
         sorted_poll_list(pmd, &list, &n_rxq);
 
@@ -5399,7 +5417,24 @@ pmd_thread_main(void *f_)
     dpdk_set_lcore_id(pmd->core_id);
     poll_cnt = pmd_load_queues_and_ports(pmd, &poll_list);
     dfc_cache_init(&pmd->flow_cache);
+    /* let's start at 0 */
+    pmd->reload_index = ARRAY_SIZE(pmd->reload_at) - 1;
+    memset(pmd->reload_at, 0, sizeof(pmd->reload_at));
+    memset(pmd->start_polling_at, 0, sizeof(pmd->start_polling_at));
+    memset(pmd->end_polling_at, 0, sizeof(pmd->end_polling_at));
+    memset(pmd->upcall_duration, 0, sizeof(pmd->upcall_duration));
+    memset(pmd->upcall_count, 0, sizeof(pmd->upcall_count));
 reload:
+    pmd->reload_index++;
+    if (pmd->reload_index >= ARRAY_SIZE(pmd->reload_at))
+        pmd->reload_index = 0;
+    pmd->reload_at[pmd->reload_index] = rte_rdtsc();
+    pmd->start_polling_at[pmd->reload_index] = 0;
+    pmd->end_polling_at[pmd->reload_index] = 0;
+    pmd->upcall_count[pmd->reload_index] = 0;
+    memset(&pmd->upcall_duration[pmd->reload_index], 0,
+           sizeof(pmd->upcall_duration[pmd->reload_index]));
+
     pmd_alloc_static_tx_qid(pmd);
 
     atomic_count_init(&pmd->pmd_overloaded, 0);
@@ -5426,6 +5461,7 @@ reload:
     cycles_counter_update(s);
     /* Protect pmd stats from external clearing while polling. */
     ovs_mutex_lock(&pmd->perf_stats.stats_mutex);
+    pmd->start_polling_at[pmd->reload_index] = rte_rdtsc();
     for (;;) {
         uint64_t rx_packets = 0, tx_packets = 0;
 
@@ -5445,6 +5481,7 @@ reload:
                                            poll_list[i].port_no);
             rx_packets += process_packets;
         }
+        pmd->end_polling_at[pmd->reload_index] = rte_rdtsc();
 
         if (!rx_packets) {
             /* We didn't receive anything in the process loop.
@@ -6639,8 +6676,13 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
                 continue;
             }
 
+            uint64_t before = rte_rdtsc();
             int error = handle_packet_upcall(pmd, packet, keys[i],
                                              &actions, &put_actions);
+            if (pmd->upcall_count[pmd->reload_index] < ARRAY_SIZE(pmd->upcall_duration[pmd->reload_index])) {
+                pmd->upcall_duration[pmd->reload_index][pmd->upcall_count[pmd->reload_index]] = rte_rdtsc() - before;
+                pmd->upcall_count[pmd->reload_index]++;
+            }
 
             if (OVS_UNLIKELY(error)) {
                 upcall_fail_cnt++;
