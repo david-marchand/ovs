@@ -5477,6 +5477,7 @@ reload:
     pmd->start_polling_at[pmd->reload_index] = rte_rdtsc();
     for (;;) {
         uint64_t rx_packets = 0, tx_packets = 0;
+        bool reload;
 
         pmd_perf_start_iteration(s);
 
@@ -5505,8 +5506,6 @@ reload:
         }
 
         if (lc++ > 1024) {
-            bool reload;
-
             lc = 0;
 
             coverage_try_clear();
@@ -5514,12 +5513,13 @@ reload:
             if (!ovsrcu_try_quiesce()) {
                 emc_cache_slow_sweep(&((pmd->flow_cache).emc_cache));
             }
-
-            atomic_read_relaxed(&pmd->reload, &reload);
-            if (reload) {
-                break;
-            }
         }
+
+        atomic_read_relaxed(&pmd->reload, &reload);
+        if (OVS_UNLIKELY(reload)) {
+            break;
+        }
+
         pmd_perf_end_iteration(s, rx_packets, tx_packets,
                                pmd_perf_metrics_enabled(pmd));
     }
