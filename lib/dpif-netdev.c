@@ -4698,9 +4698,9 @@ reload_affected_pmds(struct dp_netdev *dp)
         }
     }
     if (pmd_count) {
-        ovs_mutex_lock(&dp->cond_mutex);
-        ovs_mutex_cond_wait(&dp->cond, &dp->cond_mutex);
-        ovs_mutex_unlock(&dp->cond_mutex);
+        while(atomic_count_get(&dp->pmds_reloading)) {
+            rte_pause();
+        }
     }
 }
 
@@ -5485,8 +5485,7 @@ reload:
 
     if (!poll_cnt) {
         while (seq_read(pmd->reload_seq) == pmd->last_reload_seq) {
-            seq_wait(pmd->reload_seq, pmd->last_reload_seq);
-            poll_block();
+            rte_pause();
         }
         lc = UINT_MAX;
     }
@@ -5555,11 +5554,7 @@ reload:
 
     /* if this thread is the last one reloading, it must signal the
      * control thread waiting for it */
-    if (atomic_count_dec(&pmd->dp->pmds_reloading) == 1) {
-        ovs_mutex_lock(&pmd->dp->cond_mutex);
-        xpthread_cond_signal(&pmd->dp->cond);
-        ovs_mutex_unlock(&pmd->dp->cond_mutex);
-    }
+    atomic_count_dec(&pmd->dp->pmds_reloading);
 
     pmd_free_static_tx_qid(pmd);
 
