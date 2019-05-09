@@ -503,7 +503,7 @@ vlog_set_levels_from_string(const char *s_)
             msg = xstrdup("invalid facility");
             goto exit;
         }
-        atomic_store_explicit(&log_facility, value, memory_order_relaxed);
+        atomic_store_relaxed(&log_facility, value);
     } else {
         struct vlog_module *module = NULL;
         enum vlog_level level = VLL_N_LEVELS;
