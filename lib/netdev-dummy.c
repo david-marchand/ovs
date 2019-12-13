@@ -1154,6 +1154,23 @@ netdev_dummy_send(struct netdev *netdev, int qid OVS_UNUSED,
                             false, flow.nw_dst, flow.nw_src);
                 netdev_dummy_queue_packet(dev, reply, NULL, 0);
             }
+        } else if (ipv6_addr_is_set(&dev->ipv6)) {
+            struct dp_packet dp;
+            struct flow flow;
+
+            dp_packet_use_const(&dp, buffer, size);
+            flow_extract(&dp, &flow);
+            if (flow.dl_type == htons(ETH_TYPE_IPV6)
+                && flow.nw_proto == IPPROTO_ICMPV6
+                && flow.tp_dst == 0
+                && flow.tp_src == htons(ND_NEIGHBOR_SOLICIT)
+                && !memcmp(&flow.nd_target, &dev->ipv6, sizeof(dev->ipv6))) {
+                struct dp_packet *reply = dp_packet_new(0);
+                compose_nd_na(reply, dev->hwaddr, flow.dl_src,
+                              &flow.nd_target, &flow.ipv6_src,
+                              htonl(ND_RSO_SOLICITED | ND_RSO_OVERRIDE));
+                netdev_dummy_queue_packet(dev, reply, NULL, 0);
+            }
         }
 
         if (dev->tx_pcap) {
