@@ -164,51 +164,93 @@ static void rt_init_match(struct match *match, uint32_t mark,
     match->flow.pkt_mark = mark;
 }
 
+/*
+ * Invoke the passed callback for each addresses of a netdev.
+ * The callback return values contract is:
+ * - < 0 means an error occured, and the iteration is stopped,
+ * - == 0 means that the iteration continues,
+ * - > 0 means that we found the address the caller was looking for, and
+ *   the iteration is stopped,
+ */
 static int
-get_src_addr(const struct in6_addr *ip6_dst,
-             const char output_bridge[], struct in6_addr *psrc)
+iterate_addrs_for_device(const char name[],
+                         int (*callback)(const struct in6_addr *addr,
+                                         const struct in6_addr *mask,
+                                         void *arg),
+                         void *arg)
 {
-    struct in6_addr *mask, *addr6;
-    int err, n_in6, i, max_plen = -1;
+    struct in6_addr *addr, *mask;
     struct netdev *dev;
-    bool is_ipv4;
+    int err, n_in6, i;
 
-    err = netdev_open(output_bridge, NULL, &dev);
+    err = netdev_open(name, NULL, &dev);
     if (err) {
         return err;
     }
 
-    err = netdev_get_addr_list(dev, &addr6, &mask, &n_in6);
+    err = netdev_get_addr_list(dev, &addr, &mask, &n_in6);
     if (err) {
         goto out;
     }
 
-    is_ipv4 = IN6_IS_ADDR_V4MAPPED(ip6_dst);
-
     for (i = 0; i < n_in6; i++) {
-        struct in6_addr a1, a2;
-        int mask_bits;
-
-        if (is_ipv4 && !IN6_IS_ADDR_V4MAPPED(&addr6[i])) {
-            continue;
+        err = callback(&addr[i], &mask[i], arg);
+        if (err != 0) {
+            goto out;
         }
-
-        a1 = ipv6_addr_bitand(ip6_dst, &mask[i]);
-        a2 = ipv6_addr_bitand(&addr6[i], &mask[i]);
-        mask_bits = bitmap_count1(ALIGNED_CAST(const unsigned long *, &mask[i]), 128);
-
-        if (!memcmp(&a1, &a2, sizeof (a1)) && mask_bits > max_plen) {
-            *psrc = addr6[i];
-            max_plen = mask_bits;
-        }
-    }
-    if (max_plen == -1) {
-        err = ENOENT;
     }
 out:
-    free(addr6);
+    free(addr);
     free(mask);
     netdev_close(dev);
+    return err;
+}
+
+struct get_src_addr_ctx {
+    const struct in6_addr *ip6_dst;
+    struct in6_addr *psrc;
+    int max_plen;
+};
+
+static int
+get_src_addr_cb(const struct in6_addr *addr, const struct in6_addr *mask,
+                void *arg)
+{
+    struct get_src_addr_ctx *ctx = arg;
+    struct in6_addr a1, a2;
+    int mask_bits;
+
+    if (IN6_IS_ADDR_V4MAPPED(ctx->ip6_dst) && !IN6_IS_ADDR_V4MAPPED(addr)) {
+        return 0;
+    }
+
+    a1 = ipv6_addr_bitand(ctx->ip6_dst, mask);
+    a2 = ipv6_addr_bitand(addr, mask);
+    mask_bits = bitmap_count1(ALIGNED_CAST(const unsigned long *, mask), 128);
+
+    if (!memcmp(&a1, &a2, sizeof (a1)) && mask_bits > ctx->max_plen) {
+        *ctx->psrc = *addr;
+        ctx->max_plen = mask_bits;
+    }
+    return 0;
+}
+
+static int
+get_src_addr(const struct in6_addr *ip6_dst,
+             const char output_bridge[], struct in6_addr *psrc)
+{
+    struct get_src_addr_ctx ctx;
+    int err;
+
+    ctx.ip6_dst = ip6_dst;
+    ctx.psrc = psrc;
+    ctx.max_plen = -1;
+    err = iterate_addrs_for_device(output_bridge, get_src_addr_cb, &ctx);
+    if (err >= 0 && ctx.max_plen == -1) {
+        err = ENOENT;
+    } else if (err < 0) {
+        err = -err;
+    }
     return err;
 }
 
@@ -310,6 +352,37 @@ rt_entry_delete(uint32_t mark, uint8_t priority,
 
     cls_rule_destroy(&rule);
     return res;
+}
+
+static int
+ovs_ip_show_cb(const struct in6_addr *addr, const struct in6_addr *mask,
+               void *arg)
+{
+    struct ds *ds = arg;
+
+    if (IN6_IS_ADDR_V4MAPPED(addr)) {
+        ip_format_masked(in6_addr_get_mapped_ipv4(addr),
+                         in6_addr_get_mapped_ipv4(mask), ds);
+    } else {
+        ipv6_format_masked(addr, mask , ds);
+    }
+    ds_put_format(ds, "\n");
+    return 0;
+}
+
+static void
+ovs_ip_show(struct unixctl_conn *conn, int argc OVS_UNUSED, const char *argv[],
+            void *aux OVS_UNUSED)
+{
+    struct ds ds = DS_EMPTY_INITIALIZER;
+
+    if (iterate_addrs_for_device(argv[1], ovs_ip_show_cb, &ds)) {
+        ds_put_format(&ds, "Error listing ip addresses for %s", argv[1]);
+        unixctl_command_reply_error(conn, ds_cstr(&ds));
+    } else {
+        unixctl_command_reply(conn, ds_cstr(&ds));
+    }
+    ds_destroy(&ds);
 }
 
 static bool
@@ -528,6 +601,8 @@ ovs_router_init(void)
     if (ovsthread_once_start(&once)) {
         fatal_signal_add_hook(ovs_router_flush_handler, NULL, NULL, true);
         classifier_init(&cls, NULL);
+        unixctl_command_register("ovs/ip/show", "iface" , 1, 1,
+                                 ovs_ip_show, NULL);
         unixctl_command_register("ovs/route/add",
                                  "ip_addr/prefix_len out_br_name [gw] "
                                  "[pkt_mark=mark]",

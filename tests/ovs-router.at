@@ -7,6 +7,8 @@ OVS_VSWITCHD_START([add-port br0 p2 -- set Interface p2 type=gre \
                         -- add-port br0 p1  -- set interface p1 type=dummy])
 AT_CHECK([ovs-appctl netdev-dummy/ip4addr br0 2.2.2.2/24], [0], [OK
 ])
+AT_CHECK([ovs-appctl ovs/ip/show br0], [0], [2.2.2.2/24
+])
 AT_CHECK([ovs-appctl ovs/route/add 1.1.1.0/24 br0 2.2.2.10], [0], [OK
 ])
 OVS_VSWITCHD_STOP
@@ -52,6 +54,8 @@ AT_SETUP([appctl - route/lookup6])
 AT_KEYWORDS([ovs_router])
 OVS_VSWITCHD_START([add-port br0 p1 -- set Interface p1 type=dummy])
 AT_CHECK([ovs-appctl netdev-dummy/ip6addr br0 2001:db8:cafe::1/64], [0], [OK
+])
+AT_CHECK([ovs-appctl ovs/ip/show br0], [0], [2001:db8:cafe::1/64
 ])
 AT_CHECK([ovs-appctl ovs/route/add 2001:db8:babe::/64 br0 2001:db8:cafe::2], [0], [OK
 ])
