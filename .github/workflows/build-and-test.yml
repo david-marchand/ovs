@@ -13,8 +13,8 @@ jobs:
     env:
       dependencies: gcc libnuma-dev libxdp-dev ninja-build pkgconf
       CC: gcc
-      DPDK_GIT: https://dpdk.org/git/dpdk
-      DPDK_VER: refs/heads/main
+      DPDK_GIT: https://github.com/david-marchand/dpdk
+      DPDK_VER: refs/heads/main-for-ovs
     name: dpdk gcc
     outputs:
       dpdk_key: ${{ steps.gen_dpdk_key.outputs.key }}
@@ -159,46 +159,11 @@ jobs:
       matrix:
         include:
           - compiler:     gcc
-            opts:         --disable-ssl
-          - compiler:     clang
-            opts:         --disable-ssl
-
-          - compiler:     gcc
-            std:          c99
-          - compiler:     clang
-            std:          c99
-
-          - compiler:     gcc
-            testsuite:    test
-          - compiler:     clang
-            sanitizers:   address,undefined
-            testsuite:    test
-
-          - compiler:     gcc
-            testsuite:    test
-            opts:         --enable-shared
-          - compiler:     clang
-            testsuite:    test
-            opts:         --enable-shared
-
-          - compiler:     gcc
             testsuite:    check check-dpdk
             dpdk:         dpdk
           - compiler:     clang
             testsuite:    check check-dpdk
             dpdk:         dpdk
-
-          - compiler:     gcc
-            testsuite:    test
-            libs:         -ljemalloc
-          - compiler:     clang
-            testsuite:    test
-            libs:         -ljemalloc
-
-          - compiler:     gcc
-            opts:         --enable-afxdp
-          - compiler:     clang
-            opts:         --enable-afxdp
 
           - compiler:     gcc
             dpdk:         dpdk
@@ -221,53 +186,6 @@ jobs:
 
           - compiler:     gcc
             dpdk_experimental: dpdk-experimental
-
-          - compiler:     gcc
-            m32:          m32
-            opts:         --disable-ssl
-
-          - compiler:     gcc
-            testsuite:    check-ovsdb-cluster
-
-          - compiler:     gcc
-            testsuite:    check-kernel
-            test_range:   "-100"
-          - compiler:     gcc
-            testsuite:    check-kernel
-            test_range:   "100-"
-
-          - compiler:     clang
-            sanitizers:   address,undefined
-            testsuite:    check-kernel
-            test_range:   "-100"
-          - compiler:     clang
-            sanitizers:   address,undefined
-            testsuite:    check-kernel
-            test_range:   "100-"
-
-          - compiler:     gcc
-            testsuite:    check-offloads
-            test_range:   "-100"
-          - compiler:     gcc
-            testsuite:    check-offloads
-            test_range:   "100-"
-
-          - compiler:     gcc
-            dpdk:         dpdk
-            testsuite:    check-system-userspace
-
-          - compiler:     clang
-            sanitizers:   address,undefined
-            dpdk:         dpdk
-            testsuite:    check-system-userspace
-
-          - compiler:     gcc
-            dpdk:         dpdk
-            testsuite:    check-system-tso
-
-          - compiler:     gcc
-            dpdk:         dpdk
-            testsuite:    check-afxdp
 
     steps:
     - name: checkout
