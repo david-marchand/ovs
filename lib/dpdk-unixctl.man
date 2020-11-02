@@ -1,5 +1,7 @@
 .SS "DPDK COMMANDS"
 These commands manage DPDK components.
+.IP "\fBdpdk/lcore-list\fR"
+Lists the DPDK lcores and their cpu affinity.
 .IP "\fBdpdk/log-list\fR"
 Lists all DPDK components that emit logs and their logging levels.
 .IP "\fBdpdk/log-set\fR [\fIspec\fR]"

@@ -470,6 +470,15 @@ dpdk_init__(const struct smap *ovs_other_config)
         return false;
     }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    if (!rte_mp_disable()) {
+#pragma GCC diagnostic pop
+        VLOG_EMER("Could not disable multiprocess, DPDK won't be available.");
+        rte_eal_cleanup();
+        return false;
+    }
+
     if (VLOG_IS_DBG_ENABLED()) {
         size_t size;
         char *response = NULL;
@@ -489,6 +498,11 @@ dpdk_init__(const struct smap *ovs_other_config)
         }
     }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    unixctl_command_register("dpdk/lcores-list", "", 0, 0,
+                             dpdk_unixctl_mem_stream, rte_lcore_dump);
+#pragma GCC diagnostic pop
     unixctl_command_register("dpdk/log-list", "", 0, 0,
                              dpdk_unixctl_mem_stream, rte_log_dump);
     unixctl_command_register("dpdk/log-set", "{level | pattern:level}", 0,
@@ -572,11 +586,43 @@ dpdk_available(void)
 }
 
 void
-dpdk_set_lcore_id(unsigned cpu)
+dpdk_init_thread_context(unsigned cpu)
 {
     /* NON_PMD_CORE_ID is reserved for use by non pmd threads. */
     ovs_assert(cpu != NON_PMD_CORE_ID);
-    RTE_PER_LCORE(_lcore_id) = cpu;
+
+    if (!dpdk_available()) {
+        return;
+    }
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    if (rte_thread_register() < 0) {
+#pragma GCC diagnostic pop
+        VLOG_WARN("This OVS pmd thread will share resources with the non-pmd "
+                  "thread: %s.", rte_strerror(rte_errno));
+    } else {
+        VLOG_INFO("PMD thread uses DPDK lcore %u.", rte_lcore_id());
+    }
+}
+
+void
+dpdk_uninit_thread_context(void)
+{
+    unsigned int lcore_id;
+
+    if (!dpdk_available()) {
+        return;
+    }
+
+    lcore_id = rte_lcore_id();
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    rte_thread_unregister();
+#pragma GCC diagnostic pop
+    if (lcore_id != LCORE_ID_ANY) {
+        VLOG_INFO("PMD thread released DPDK lcore %u.", lcore_id);
+    }
 }
 
 void
