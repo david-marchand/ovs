@@ -88,27 +88,7 @@ function install_dpdk()
     local DPDK_VER=$1
     local VERSION_FILE="dpdk-dir/travis-dpdk-cache-version"
     local DPDK_OPTS=""
-    local DPDK_LIB=""
-
-    if [ -z "$TRAVIS_ARCH" ] ||
-       [ "$TRAVIS_ARCH" == "amd64" ]; then
-        DPDK_LIB=$(pwd)/dpdk-dir/build/lib/x86_64-linux-gnu
-    elif [ "$TRAVIS_ARCH" == "aarch64" ]; then
-        DPDK_LIB=$(pwd)/dpdk-dir/build/lib/aarch64-linux-gnu
-    else
-        echo "Target is unknown"
-        exit 1
-    fi
-
-    if [ "$DPDK_SHARED" ]; then
-        EXTRA_OPTS="$EXTRA_OPTS --with-dpdk=shared"
-        export LD_LIBRARY_PATH=$DPDK_LIB/:$LD_LIBRARY_PATH
-    else
-        EXTRA_OPTS="$EXTRA_OPTS --with-dpdk=static"
-    fi
-
-    # Export the following path for pkg-config to find the .pc file.
-    export PKG_CONFIG_PATH=$DPDK_LIB/pkgconfig/:$PKG_CONFIG_PATH
+    local DPDK_PKG_CONFIG_DIR=""
 
     if [ "${DPDK_VER##refs/*/}" != "${DPDK_VER}" ]; then
         # Avoid using cache for git tree build.
@@ -154,10 +134,25 @@ function install_dpdk()
     # Update the library paths.
     sudo ldconfig
 
-
     echo "Installed DPDK source in $(pwd)"
     popd
     echo "${DPDK_VER}" > ${VERSION_FILE}
+
+    DPDK_PKG_CONFIG_DIR=$(find $(pwd)/dpdk-dir/build -name pkgconfig)
+    # Export the following path for pkg-config to find the .pc file.
+    export PKG_CONFIG_PATH="$DPDK_PKG_CONFIG_DIR":$PKG_CONFIG_PATH
+    if [ ! -d "$DPDK_PKG_CONFIG_DIR" ] || \
+       ! pkg-config libdpdk >/dev/null 2>&1; then
+        echo "Could not find pkg-config configuration for DPDK"
+        exit 1
+    fi
+
+    if [ "$DPDK_SHARED" ]; then
+        EXTRA_OPTS="$EXTRA_OPTS --with-dpdk=shared"
+        export LD_LIBRARY_PATH=$DPDK_PKG_CONFIG_DIR/..:$LD_LIBRARY_PATH
+    else
+        EXTRA_OPTS="$EXTRA_OPTS --with-dpdk=static"
+    fi
 }
 
 function configure_ovs()
