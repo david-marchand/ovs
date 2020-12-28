@@ -4,6 +4,7 @@ set -o errexit
 set -x
 
 CFLAGS_FOR_OVS="-g -O2"
+SPARSE="${SPARSE:-yes}"
 SPARSE_FLAGS=""
 EXTRA_OPTS="--enable-Werror"
 
@@ -206,15 +207,19 @@ if [ "$CC" = "clang" ]; then
     CFLAGS_FOR_OVS="${CFLAGS_FOR_OVS} -Wno-error=unused-command-line-argument"
 elif [ "$M32" ]; then
     # Not using sparse for 32bit builds on 64bit machine.
+    SPARSE="no"
     # Adding m32 flag directly to CC to avoid any posiible issues with API/ABI
     # difference on 'configure' and 'make' stages.
     export CC="$CC -m32"
 elif [ "$TRAVIS_ARCH" != "aarch64" ]; then
-    OPTS="--enable-sparse"
     if [ "$AFXDP" ]; then
         # netdev-afxdp uses memset for 64M for umem initialization.
         SPARSE_FLAGS="${SPARSE_FLAGS} -Wno-memcpy-max-count"
     fi
+fi
+
+if [ "$SPARSE" = "yes" ]; then
+    OPTS="--enable-sparse"
     CFLAGS_FOR_OVS="${CFLAGS_FOR_OVS} ${SPARSE_FLAGS}"
 fi
 
