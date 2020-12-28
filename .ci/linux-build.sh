@@ -111,6 +111,7 @@ function install_dpdk()
         fi
         # No cache or version mismatch.
         rm -rf dpdk-dir
+        [ -e dpdk-$1.tar.xz ] ||
         wget https://fast.dpdk.org/rel/dpdk-$1.tar.xz
         tar xvf dpdk-$1.tar.xz > /dev/null
         DIR_NAME=$(tar -tf dpdk-$1.tar.xz | head -1 | cut -f1 -d"/")
