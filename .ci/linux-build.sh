@@ -128,7 +128,7 @@ function install_dpdk()
     # Install DPDK using prefix.
     DPDK_OPTS="$DPDK_OPTS --prefix=$(pwd)/build"
 
-    CC=gcc meson $DPDK_OPTS build
+    CC=gcc meson $DPDK_OPTS $DPDK_EXTRA_OPTS build
     ninja -C build
     ninja -C build install
 
