@@ -213,6 +213,12 @@ load for each of its associated queues every 10 seconds. If the aggregated PMD
 load reaches the load threshold for 6 consecutive intervals then PMD considers
 itself to be overloaded.
 
+.. versionchanged:: 2.16.0
+
+   The per PMD load is shown in the same fashion than Rx queue's in the output
+   of ``pmd-rxq-show``. It accounts for all Rx queue's processing cycles and
+   internal PMD core main loop cost.
+
 For example, to set the load threshold to 70%::
 
     $ ovs-vsctl set open_vswitch .\
