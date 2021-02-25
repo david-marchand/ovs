@@ -4596,7 +4596,7 @@ dp_netdev_rxq_set_cycles(struct dp_netdev_rxq *rx,
                          enum rxq_cycles_counter_type type,
                          unsigned long long cycles)
 {
-   atomic_store_relaxed(&rx->cycles[type], cycles);
+    atomic_store_relaxed(&rx->cycles[type], cycles);
 }
 
 static void
@@ -5992,11 +5992,11 @@ reload:
 
     /* List port/core affinity */
     for (i = 0; i < poll_cnt; i++) {
-       VLOG_DBG("Core %d processing port \'%s\' with queue-id %d\n",
-                pmd->core_id, netdev_rxq_get_name(poll_list[i].rxq->rx),
-                netdev_rxq_get_queue_id(poll_list[i].rxq->rx));
-       /* Reset the rxq current cycles counter. */
-       dp_netdev_rxq_set_cycles(poll_list[i].rxq, RXQ_CYCLES_PROC_CURR, 0);
+        VLOG_DBG("Core %d processing port \'%s\' with queue-id %d\n",
+                 pmd->core_id, netdev_rxq_get_name(poll_list[i].rxq->rx),
+                 netdev_rxq_get_queue_id(poll_list[i].rxq->rx));
+        /* Reset the rxq current cycles counter. */
+        dp_netdev_rxq_set_cycles(poll_list[i].rxq, RXQ_CYCLES_PROC_CURR, 0);
     }
 
     if (!poll_cnt) {
@@ -6285,7 +6285,7 @@ dp_netdev_run_meter(struct dp_netdev *dp, struct dp_packet_batch *packets_,
             dp_packet_batch_refill(packets_, packet, j);
         }
     }
- out:
+out:
     meter_unlock(dp, meter_id);
 }
 
@@ -6802,7 +6802,7 @@ dp_netdev_del_bond_tx_from_pmd(struct dp_netdev_pmd_thread *pmd,
 static char *
 dpif_netdev_get_datapath_version(void)
 {
-     return xstrdup("<built-in>");
+    return xstrdup("<built-in>");
 }
 
 static void
@@ -7366,7 +7366,7 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
         }
 
         flow = dp_netdev_flow_cast(rules[i]);
-        uint32_t hash =  dp_netdev_flow_hash(&flow->ufid);
+        uint32_t hash = dp_netdev_flow_hash(&flow->ufid);
         smc_insert(pmd, keys[i], hash);
 
         emc_probabilistic_insert(pmd, keys[i], flow);
