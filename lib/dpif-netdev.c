@@ -910,6 +910,8 @@ dp_netdev_rxq_set_intrvl_cycles(struct dp_netdev_rxq *rx,
                            unsigned long long cycles);
 static uint64_t
 dp_netdev_rxq_get_intrvl_cycles(struct dp_netdev_rxq *rx, unsigned idx);
+static uint64_t
+dp_netdev_rxq_get_last_intrvl_cycles(struct dp_netdev_rxq *rx);
 static void
 dpif_netdev_xps_revalidate_pmd(const struct dp_netdev_pmd_thread *pmd,
                                bool purge);
@@ -1232,8 +1234,11 @@ pmd_info_show_rxq(struct ds *reply, struct dp_netdev_pmd_thread *pmd)
     if (pmd->core_id != NON_PMD_CORE_ID) {
         struct rxq_poll *list;
         size_t n_rxq;
-        uint64_t total_cycles = 0;
+        uint64_t intrvl_cycles;
+        uint64_t total_cycles;
         uint64_t busy_cycles = 0;
+        uint64_t last_busy_cycles;
+        unsigned int last_intrvl_idx;
 
         ds_put_format(reply,
                       "pmd thread numa_id %d core_id %u:\n  isolated : %s\n",
@@ -1244,9 +1249,17 @@ pmd_info_show_rxq(struct ds *reply, struct dp_netdev_pmd_thread *pmd)
         sorted_poll_list(pmd, &list, &n_rxq);
 
         /* Get the total pmd cycles for an interval. */
-        atomic_read_relaxed(&pmd->intrvl_cycles, &total_cycles);
+        atomic_read_relaxed(&pmd->intrvl_cycles, &intrvl_cycles);
         /* Estimate the cycles to cover all intervals. */
-        total_cycles *= PMD_INTERVAL_MAX;
+        total_cycles = intrvl_cycles * PMD_INTERVAL_MAX;
+
+        last_intrvl_idx = pmd->intrvl_idx + PMD_INTERVAL_MAX - 1;
+        last_intrvl_idx %= PMD_INTERVAL_MAX;
+        atomic_read_relaxed(&pmd->busy_cycles_intrvl[last_intrvl_idx],
+                            &last_busy_cycles);
+        if (last_busy_cycles > intrvl_cycles) {
+            last_busy_cycles = intrvl_cycles;
+        }
 
         for (int j = 0; j < PMD_INTERVAL_MAX; j++) {
              uint64_t cycles;
@@ -1262,6 +1275,8 @@ pmd_info_show_rxq(struct ds *reply, struct dp_netdev_pmd_thread *pmd)
         if (total_cycles) {
             ds_put_format(reply, "%2"PRIu64" %%",
                           busy_cycles * 100 / total_cycles);
+            ds_put_format(reply, " (%2"PRIu64" %%)",
+                          last_busy_cycles * 100 / intrvl_cycles);
         } else {
             ds_put_cstr(reply, "NOT AVAIL");
         }
@@ -1270,10 +1285,16 @@ pmd_info_show_rxq(struct ds *reply, struct dp_netdev_pmd_thread *pmd)
         for (int i = 0; i < n_rxq; i++) {
             struct dp_netdev_rxq *rxq = list[i].rxq;
             const char *name = netdev_rxq_get_name(rxq->rx);
+            uint64_t last_proc_cycles;
             uint64_t proc_cycles = 0;
 
             for (int j = 0; j < PMD_INTERVAL_MAX; j++) {
                 proc_cycles += dp_netdev_rxq_get_intrvl_cycles(rxq, j);
+            }
+
+            last_proc_cycles = dp_netdev_rxq_get_last_intrvl_cycles(rxq);
+            if (last_proc_cycles > intrvl_cycles) {
+                last_proc_cycles = intrvl_cycles;
             }
             ds_put_format(reply, "  port: %-16s  queue-id: %2d", name,
                           netdev_rxq_get_queue_id(list[i].rxq->rx));
@@ -1281,9 +1302,10 @@ pmd_info_show_rxq(struct ds *reply, struct dp_netdev_pmd_thread *pmd)
                                         ? "(enabled) " : "(disabled)");
             ds_put_format(reply, "  pmd usage: ");
             if (total_cycles) {
-                ds_put_format(reply, "%2"PRIu64"",
+                ds_put_format(reply, "%2"PRIu64" %%",
                               proc_cycles * 100 / total_cycles);
-                ds_put_cstr(reply, " %");
+                ds_put_format(reply, " (%2"PRIu64" %%)",
+                              last_proc_cycles * 100 / intrvl_cycles);
             } else {
                 ds_put_format(reply, "%s", "NOT AVAIL");
             }
@@ -4653,6 +4675,16 @@ static uint64_t
 dp_netdev_rxq_get_intrvl_cycles(struct dp_netdev_rxq *rx, unsigned idx)
 {
     unsigned long long processing_cycles;
+    atomic_read_relaxed(&rx->cycles_intrvl[idx], &processing_cycles);
+    return processing_cycles;
+}
+
+static uint64_t
+dp_netdev_rxq_get_last_intrvl_cycles(struct dp_netdev_rxq *rx)
+{
+    unsigned long long processing_cycles;
+    unsigned int idx;
+    idx = (rx->intrvl_idx + PMD_INTERVAL_MAX - 1) % PMD_INTERVAL_MAX;
     atomic_read_relaxed(&rx->cycles_intrvl[idx], &processing_cycles);
     return processing_cycles;
 }

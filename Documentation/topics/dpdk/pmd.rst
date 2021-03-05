@@ -219,6 +219,9 @@ itself to be overloaded.
    of ``pmd-rxq-show``. It accounts for all Rx queue's processing cycles and
    internal PMD core main loop cost.
 
+   The last 10 seconds interval values for the PMD load and Rx Queue's PMD core
+   cycles usage has been added in OVS 2.16.0 to ease troubleshooting.
+
 For example, to set the load threshold to 70%::
 
     $ ovs-vsctl set open_vswitch .\
