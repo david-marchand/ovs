@@ -2,33 +2,53 @@ AT_BANNER([PMD Auto Load Balance])
 
 m4_divert_push([PREPARE_TESTS])
 
-get_log_line_num () {
-    LINENUM=$(cat ovs-vswitchd.log | wc -l | tr -d [[:blank:]])
+filter_pmd_alb_improvement() {
+    sed -n 's/.*\(PMD auto load balance improvement \)threshold \(set to .*\)/\1\2/p'
+}
+
+filter_pmd_alb_interval() {
+    sed -n 's/.*\(PMD auto load balance interval set to .*\)/\1/p'
+}
+
+filter_pmd_alb_load() {
+    sed -n 's/.*\(PMD auto load balance load \)threshold \(set to .*\)/\1\2/p'
+}
+
+filter_pmd_alb_state() {
+    sed -n 's/.*\(PMD auto load balance is \(dis\|en\)abled\).*/\1/p'
 }
 
 m4_divert_pop([PREPARE_TESTS])
 
 m4_define([DUMMY_NUMA], [--dummy-numa="0,0"])
 
-dnl CHECK_ALB_PARAM([param], [value], [+line])
+dnl CHECK_ALB_STATE([value], [n])
 dnl
-dnl Waits for ALB logs for 'param' in logs and checks if value matches
-dnl 'value'. Checking starts from line number 'line' in ovs-vswithd.log.
+dnl Waits for 'n' occurences of ALB logs for state changes in logs and checks
+dnl if last state matches 'value'.
+m4_define([CHECK_ALB_STATE], [
+    AT_CHECK([test `filter_pmd_alb_state < ovs-vswitchd.log | wc -l` -le $2])
+    OVS_WAIT_UNTIL([test `filter_pmd_alb_state < ovs-vswitchd.log | wc -l` -eq $2])
+    AT_CHECK([filter_pmd_alb_state < ovs-vswitchd.log | tail -1], [0], [dnl
+PMD auto load balance is $1
+])
+])
+
+dnl CHECK_ALB_PARAM([param], [value], [n])
+dnl
+dnl Waits for 'n' occurences of ALB logs for 'param' in logs and checks if
+dnl last value matches 'value'.
 m4_define([CHECK_ALB_PARAM], [
-    line_st=$3
-    if [[ -z "$line_st" ]]
-    then
-        line_st="+0"
-    fi
-    OVS_WAIT_UNTIL([tail -n $line_st ovs-vswitchd.log | grep "PMD auto load balance $1 set to"])
-    AT_CHECK([tail -n $line_st ovs-vswitchd.log | sed -n "s#.*\(PMD auto load balance $1 set to.*\)#\1#p" | tail -1], [0], [dnl
+    AT_CHECK([test `filter_pmd_alb_$1 < ovs-vswitchd.log | wc -l` -le $3])
+    OVS_WAIT_UNTIL([test `filter_pmd_alb_$1 < ovs-vswitchd.log | wc -l` -eq $3])
+    AT_CHECK([filter_pmd_alb_$1 < ovs-vswitchd.log | tail -1], [0], [dnl
 PMD auto load balance $1 set to $2
 ])
 ])
 
 AT_SETUP([ALB - default state])
 OVS_VSWITCHD_START
-OVS_WAIT_UNTIL([grep "PMD auto load balance is disabled" ovs-vswitchd.log])
+CHECK_ALB_STATE([disabled], [1])
 
 OVS_VSWITCHD_STOP
 AT_CLEANUP
@@ -39,15 +59,13 @@ OVS_VSWITCHD_START([add-port br0 p0 \
                     -- set Open_vSwitch . other_config:pmd-cpu-mask=3 \
                     -- set open_vswitch . other_config:pmd-auto-lb="true"],
                    [], [], [DUMMY_NUMA])
-OVS_WAIT_UNTIL([grep "PMD auto load balance is enabled" ovs-vswitchd.log])
+CHECK_ALB_STATE([enabled], [2])
 
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb="false"])
-OVS_WAIT_UNTIL([tail -n +$LINENUM ovs-vswitchd.log | grep "PMD auto load balance is disabled"])
+CHECK_ALB_STATE([disabled], [3])
 
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb="true"])
-OVS_WAIT_UNTIL([tail -n +$LINENUM ovs-vswitchd.log | grep "PMD auto load balance is enabled"])
+CHECK_ALB_STATE([enabled], [4])
 
 OVS_VSWITCHD_STOP
 AT_CLEANUP
@@ -58,29 +76,26 @@ OVS_VSWITCHD_START([add-port br0 p0 \
                     -- set Open_vSwitch . other_config:pmd-cpu-mask=1 \
                     -- set open_vswitch . other_config:pmd-auto-lb="true"],
                    [], [], [DUMMY_NUMA])
-OVS_WAIT_UNTIL([grep "PMD auto load balance is disabled" ovs-vswitchd.log])
+CHECK_ALB_STATE([disabled], [1])
 
 # Add more PMD
 AT_CHECK([ovs-vsctl set Open_vSwitch . other_config:pmd-cpu-mask=0x3])
 OVS_WAIT_UNTIL([grep "There are 2 pmd threads on numa node" ovs-vswitchd.log])
+CHECK_ALB_STATE([disabled], [1])
 
 # Add one more rxq to have 2 rxq on a PMD
-get_log_line_num
 AT_CHECK([ovs-vsctl set interface p0 options:n_rxq=3])
-OVS_WAIT_UNTIL([tail -n +$LINENUM ovs-vswitchd.log | grep "PMD auto load balance is enabled"])
+CHECK_ALB_STATE([enabled], [2])
 
 # Reduce PMD
-get_log_line_num
 AT_CHECK([ovs-vsctl set Open_vSwitch . other_config:pmd-cpu-mask=0x1])
-OVS_WAIT_UNTIL([tail -n +$LINENUM ovs-vswitchd.log | grep "PMD auto load balance is disabled"])
+CHECK_ALB_STATE([disabled], [3])
 
 # Check logs when try to enable but min PMD/RxQ prevents
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb="false"])
-OVS_WAIT_UNTIL([tail -n +$LINENUM ovs-vswitchd.log | grep "PMD auto load balance is disabled"])
-get_log_line_num
+CHECK_ALB_STATE([disabled], [4])
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb="true"])
-OVS_WAIT_UNTIL([tail -n +$LINENUM ovs-vswitchd.log | grep "PMD auto load balance is disabled"])
+CHECK_ALB_STATE([disabled], [5])
 
 OVS_VSWITCHD_STOP
 AT_CLEANUP
@@ -91,56 +106,47 @@ OVS_VSWITCHD_START([add-port br0 p0 \
                     -- set Open_vSwitch . other_config:pmd-cpu-mask=3 \
                     -- set open_vswitch . other_config:pmd-auto-lb="true"],
                    [], [], [DUMMY_NUMA])
-OVS_WAIT_UNTIL([grep "PMD auto load balance is enabled" ovs-vswitchd.log])
+CHECK_ALB_STATE([enabled], [2])
 
 # Change assignment type
-get_log_line_num
 AT_CHECK([ovs-vsctl set Open_vSwitch . other_config:pmd-rxq-assign=roundrobin])
-OVS_WAIT_UNTIL([tail -n +$LINENUM ovs-vswitchd.log | grep "PMD auto load balance is disabled"])
+CHECK_ALB_STATE([disabled], [3])
 
 # Change back assignment type
-get_log_line_num
 AT_CHECK([ovs-vsctl set Open_vSwitch . other_config:pmd-rxq-assign=cycles])
-OVS_WAIT_UNTIL([tail -n +$LINENUM ovs-vswitchd.log | grep "PMD auto load balance is enabled"])
+CHECK_ALB_STATE([enabled], [4])
 
 # Check logs when try to enable but assignment prevents
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb="false"])
-OVS_WAIT_UNTIL([tail -n +$LINENUM ovs-vswitchd.log | grep "PMD auto load balance is disabled"])
+CHECK_ALB_STATE([disabled], [5])
 AT_CHECK([ovs-vsctl set Open_vSwitch . other_config:pmd-rxq-assign=roundrobin])
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb="true"])
-OVS_WAIT_UNTIL([tail -n +$LINENUM ovs-vswitchd.log | grep "PMD auto load balance is disabled"])
+CHECK_ALB_STATE([disabled], [6])
 
 OVS_VSWITCHD_STOP
 AT_CLEANUP
 
 AT_SETUP([ALB - interval param])
 OVS_VSWITCHD_START
-OVS_WAIT_UNTIL([grep "PMD auto load balance is disabled" ovs-vswitchd.log])
 
 # Check default
-CHECK_ALB_PARAM([interval], [1 mins], [])
+CHECK_ALB_PARAM([interval], [1 mins], [1])
 
 # Set new value
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb-rebal-interval="10"])
-CHECK_ALB_PARAM([interval], [10 mins], [+$LINENUM])
+CHECK_ALB_PARAM([interval], [10 mins], [2])
 
 # Set min value
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb-rebal-interval="1"])
-CHECK_ALB_PARAM([interval], [1 mins], [+$LINENUM])
+CHECK_ALB_PARAM([interval], [1 mins], [3])
 
 # Set max value
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb-rebal-interval="20000"])
-CHECK_ALB_PARAM([interval], [20000 mins], [+$LINENUM])
+CHECK_ALB_PARAM([interval], [20000 mins], [4])
 
 # Set below min value
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb-rebal-interval="0"])
-CHECK_ALB_PARAM([interval], [1 mins], [+$LINENUM])
+CHECK_ALB_PARAM([interval], [1 mins], [5])
 
 # No check for above max as it is only a documented max value and not a hard limit
 
@@ -149,70 +155,58 @@ AT_CLEANUP
 
 AT_SETUP([ALB - improvement param])
 OVS_VSWITCHD_START
-OVS_WAIT_UNTIL([grep "PMD auto load balance is disabled" ovs-vswitchd.log])
 
 # Check default
-CHECK_ALB_PARAM([improvement threshold], [25%], [])
+CHECK_ALB_PARAM([improvement], [25%], [1])
 
 # Set new value
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb-improvement-threshold=60])
-CHECK_ALB_PARAM([improvement threshold], [60%], [+$LINENUM])
+CHECK_ALB_PARAM([improvement], [60%], [2])
 
 # Set min value
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb-improvement-threshold=0])
-CHECK_ALB_PARAM([improvement threshold], [0%], [+$LINENUM])
+CHECK_ALB_PARAM([improvement], [0%], [3])
 
 # Set below min value
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb-improvement-threshold=-1])
-CHECK_ALB_PARAM([improvement threshold], [25%], [+$LINENUM])
+CHECK_ALB_PARAM([improvement], [25%], [4])
 
 # Set max value
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb-improvement-threshold=100])
-CHECK_ALB_PARAM([improvement threshold], [100%], [+$LINENUM])
+CHECK_ALB_PARAM([improvement], [100%], [5])
 
 # Set above max value
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb-improvement-threshold=101])
-CHECK_ALB_PARAM([improvement threshold], [25%], [+$LINENUM])
+CHECK_ALB_PARAM([improvement], [25%], [6])
 
 OVS_VSWITCHD_STOP
 AT_CLEANUP
 
 AT_SETUP([ALB - load param])
 OVS_VSWITCHD_START
-OVS_WAIT_UNTIL([grep "PMD auto load balance is disabled" ovs-vswitchd.log])
 
 # Check default
-CHECK_ALB_PARAM([load threshold], [95%], [])
+CHECK_ALB_PARAM([load], [95%], [1])
 
 # Set to new value
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb-load-threshold=70])
-CHECK_ALB_PARAM([load threshold], [70%], [+$LINENUM])
+CHECK_ALB_PARAM([load], [70%], [2])
 
 # Set to min value
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb-load-threshold=0])
-CHECK_ALB_PARAM([load threshold], [0%], [+$LINENUM])
+CHECK_ALB_PARAM([load], [0%], [3])
 
 # Set to below min
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb-load-threshold=-1])
-CHECK_ALB_PARAM([load threshold], [95%], [+$LINENUM])
+CHECK_ALB_PARAM([load], [95%], [4])
 
 # Set to max
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb-load-threshold=100])
-CHECK_ALB_PARAM([load threshold], [100%], [+$LINENUM])
+CHECK_ALB_PARAM([load], [100%], [5])
 
 # Set above max value
-get_log_line_num
 AT_CHECK([ovs-vsctl set open_vswitch . other_config:pmd-auto-lb-load-threshold=101])
-CHECK_ALB_PARAM([load threshold], [95%], [+$LINENUM])
+CHECK_ALB_PARAM([load], [95%], [6])
 
 OVS_VSWITCHD_STOP
 AT_CLEANUP
