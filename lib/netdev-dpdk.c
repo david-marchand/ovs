@@ -35,6 +35,7 @@
 #include <rte_malloc.h>
 #include <rte_mbuf.h>
 #include <rte_meter.h>
+#include <rte_net.h>
 #include <rte_pci.h>
 #include <rte_version.h>
 #include <rte_vhost.h>
@@ -2167,15 +2168,27 @@ static bool
 netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
 {
     struct dp_packet *pkt = CONTAINER_OF(mbuf, struct dp_packet, mbuf);
+    uint32_t ptype = rte_net_get_ptype(mbuf, NULL, RTE_PTYPE_ALL_MASK);
 
-    if (mbuf->ol_flags & PKT_TX_L4_MASK) {
+    if ((ptype & RTE_PTYPE_L4_MASK) != 0 &&
+        (mbuf->ol_flags & PKT_RX_L4_CKSUM_MASK) == PKT_RX_L4_CKSUM_NONE) {
         mbuf->l2_len = (char *)dp_packet_l3(pkt) - (char *)dp_packet_eth(pkt);
         mbuf->l3_len = (char *)dp_packet_l4(pkt) - (char *)dp_packet_l3(pkt);
         mbuf->outer_l2_len = 0;
         mbuf->outer_l3_len = 0;
+        switch (ptype & RTE_PTYPE_L4_MASK) {
+        case RTE_PTYPE_L4_TCP:
+            mbuf->ol_flags |= PKT_TX_TCP_CKSUM;
+            break;
+        case RTE_PTYPE_L4_UDP:
+            mbuf->ol_flags |= PKT_TX_UDP_CKSUM;
+            break;
+        default:
+            break;
+        }
     }
 
-    if (mbuf->ol_flags & PKT_TX_TCP_SEG) {
+    if (mbuf->pkt_len > dev->max_packet_len) {
         struct tcp_header *th = dp_packet_l4(pkt);
 
         if (!th) {
@@ -2185,10 +2198,10 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
         }
 
         mbuf->l4_len = TCP_OFFSET(th->tcp_ctl) * 4;
-        mbuf->ol_flags |= PKT_TX_TCP_CKSUM;
         mbuf->tso_segsz = dev->mtu - mbuf->l3_len - mbuf->l4_len;
+        mbuf->ol_flags |= PKT_TX_TCP_SEG;
 
-        if (mbuf->ol_flags & PKT_TX_IPV4) {
+        if ((ptype & RTE_PTYPE_L3_MASK) == RTE_PTYPE_L3_IPV4) {
             mbuf->ol_flags |= PKT_TX_IP_CKSUM;
         }
     }
@@ -2531,12 +2544,15 @@ netdev_dpdk_filter_packet_len(struct netdev_dpdk *dev, struct rte_mbuf **pkts,
     int i = 0;
     int cnt = 0;
     struct rte_mbuf *pkt;
+    bool device_supports_tso = dev->up.ol_flags & NETDEV_TX_OFFLOAD_TCP_TSO;
 
-    /* Filter oversized packets, unless are marked for TSO. */
+    /* Filter oversized packets, unless the port supports TSO and the packet is
+     * TCP. */
     for (i = 0; i < pkt_cnt; i++) {
         pkt = pkts[i];
-        if (OVS_UNLIKELY((pkt->pkt_len > dev->max_packet_len)
-            && !(pkt->ol_flags & PKT_TX_TCP_SEG))) {
+        if (OVS_UNLIKELY(pkt->pkt_len > dev->max_packet_len
+            && (!device_supports_tso
+                || (rte_net_get_ptype(pkt, NULL, RTE_PTYPE_ALL_MASK) & RTE_PTYPE_L4_MASK) != RTE_PTYPE_L4_TCP))) {
             VLOG_WARN_RL(&rl, "%s: Too big size %" PRIu32 " "
                          "max_packet_len %d", dev->up.name, pkt->pkt_len,
                          dev->max_packet_len);
