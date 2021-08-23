@@ -26,6 +26,8 @@
 
 struct netdev;
 
+int linux_open_tap(const char *name, int *tap_fd, short extra_ifr_flags);
+bool linux_tap_supports_multi_queue(int tap_fd);
 int netdev_linux_ethtool_set_flag(struct netdev *netdev, uint32_t flag,
                                   const char *flag_name, bool enable);
 int linux_get_ifindex(const char *netdev_name);

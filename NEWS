@@ -34,6 +34,8 @@ Post-v3.1.0
      * ovs-vswitchd will keep the CAP_SYS_RAWIO capability when started
        with the --hw-rawio-access command line option.  This allows the
        process extra privileges when mapping physical interconnect memory.
+     * Add 'dpdkvirtiouser' netdev to have better performance in
+       DPDK port -> kernel case.
    - SRv6 Tunnel Protocol
      * Added support for userspace datapath (only).
 

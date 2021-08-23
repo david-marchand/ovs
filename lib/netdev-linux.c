@@ -975,6 +975,66 @@ netdev_linux_construct(struct netdev *netdev_)
     return 0;
 }
 
+int
+linux_open_tap(const char *name, int *tap_fd, short extra_ifr_flags)
+{
+    static const char tap_dev[] = "/dev/net/tun";
+    struct ifreq ifr;
+    int error;
+
+    *tap_fd = open(tap_dev, O_RDWR);
+    if (*tap_fd < 0) {
+        VLOG_WARN("opening \"%s\" failed: %s", tap_dev, ovs_strerror(errno));
+        return errno;
+    }
+
+    memset(&ifr, 0, sizeof ifr);
+    ifr.ifr_flags = IFF_TAP | IFF_NO_PI | IFF_MULTI_QUEUE | extra_ifr_flags;
+    ovs_strzcpy(ifr.ifr_name, name, sizeof ifr.ifr_name);
+
+    if (ioctl(*tap_fd, TUNSETIFF, &ifr) == -1) {
+        VLOG_DBG("%s: creating tap device with IFF_MULTI_QUEUE failed: %s",
+                 name, ovs_strerror(errno));
+        memset(&ifr, 0, sizeof ifr);
+        ifr.ifr_flags = IFF_TAP | IFF_NO_PI | extra_ifr_flags;
+        ovs_strzcpy(ifr.ifr_name, name, sizeof ifr.ifr_name);
+        if (ioctl(*tap_fd, TUNSETIFF, &ifr) == -1) {
+            VLOG_WARN("%s: creating tap device failed: %s",
+                      name, ovs_strerror(errno));
+            error = errno;
+            goto error_close;
+        }
+    }
+
+    if (ioctl(*tap_fd, TUNSETPERSIST, 1)) {
+        VLOG_WARN("%s: creating tap device failed (persist): %s", name,
+                  ovs_strerror(errno));
+        error = errno;
+        goto error_close;
+    }
+
+    error = set_nonblocking(*tap_fd);
+    if (error) {
+        goto error_close;
+    }
+
+    return 0;
+
+error_close:
+    close(*tap_fd);
+    return error;
+}
+
+bool
+linux_tap_supports_multi_queue(int tap_fd)
+{
+    struct ifreq ifr;
+
+    memset(&ifr, 0, sizeof ifr);
+    return ioctl(tap_fd, TUNGETIFF, &ifr) == 0 &&
+        (ifr.ifr_flags & IFF_MULTI_QUEUE) != 0;
+}
+
 /* For most types of netdevs we open the device for each call of
  * netdev_open().  However, this is not the case with tap devices,
  * since it is only possible to open the device once.  In this
@@ -985,49 +1045,22 @@ static int
 netdev_linux_construct_tap(struct netdev *netdev_)
 {
     struct netdev_linux *netdev = netdev_linux_cast(netdev_);
-    static const char tap_dev[] = "/dev/net/tun";
     const char *name = netdev_->name;
-    struct ifreq ifr;
+    short extra_ifr_flags = 0;
+    int error;
 
-    int error = netdev_linux_common_construct(netdev_);
+    error = netdev_linux_common_construct(netdev_);
     if (error) {
         return error;
     }
 
-    /* Open tap device. */
-    netdev->tap_fd = open(tap_dev, O_RDWR);
-    if (netdev->tap_fd < 0) {
-        error = errno;
-        VLOG_WARN("opening \"%s\" failed: %s", tap_dev, ovs_strerror(error));
-        return error;
-    }
-
-    /* Create tap device. */
-    get_flags(&netdev->up, &netdev->ifi_flags);
-    ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
+    /* Create tap device */
     if (userspace_tso_enabled()) {
-        ifr.ifr_flags |= IFF_VNET_HDR;
+        extra_ifr_flags |= IFF_VNET_HDR;
     }
-
-    ovs_strzcpy(ifr.ifr_name, name, sizeof ifr.ifr_name);
-    if (ioctl(netdev->tap_fd, TUNSETIFF, &ifr) == -1) {
-        VLOG_WARN("%s: creating tap device failed: %s", name,
-                  ovs_strerror(errno));
-        error = errno;
-        goto error_close;
-    }
-
-    /* Make non-blocking. */
-    error = set_nonblocking(netdev->tap_fd);
+    error = linux_open_tap(netdev_->name, &netdev->tap_fd, extra_ifr_flags);
     if (error) {
-        goto error_close;
-    }
-
-    if (ioctl(netdev->tap_fd, TUNSETPERSIST, 1)) {
-        VLOG_WARN("%s: creating tap device failed (persist): %s", name,
-                  ovs_strerror(errno));
-        error = errno;
-        goto error_close;
+        return error;
     }
 
     if (userspace_tso_enabled()) {
@@ -1047,6 +1080,7 @@ netdev_linux_construct_tap(struct netdev *netdev_)
         }
     }
 
+    get_flags(&netdev->up, &netdev->ifi_flags);
     netdev->present = true;
     return 0;
 

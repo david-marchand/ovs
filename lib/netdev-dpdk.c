@@ -50,6 +50,7 @@
 #include "fatal-signal.h"
 #include "if-notifier.h"
 #include "mpsc-queue.h"
+#include "netdev-linux.h"
 #include "netdev-provider.h"
 #include "netdev-vport.h"
 #include "odp-util.h"
@@ -218,6 +219,7 @@ struct netdev_dpdk_sw_stats {
 enum dpdk_dev_type {
     DPDK_DEV_ETH = 0,
     DPDK_DEV_VHOST = 1,
+    DPDK_DEV_VIRTIO_USER = 2,
 };
 
 /* Quality of Service */
@@ -464,13 +466,22 @@ struct netdev_dpdk {
         struct ovs_mutex mutex OVS_ACQ_AFTER(dpdk_mutex);
         struct dpdk_mp *dpdk_mp;
 
-        /* virtio identifier for vhost devices */
-        ovsrcu_index vid;
+        union {
+            struct {
+                /* virtio identifier for vhost devices */
+                ovsrcu_index vid;
+                /* True if vHost device is 'up' and has been reconfigured
+                 * at least once. */
+                bool vhost_reconfigured;
+                atomic_uint8_t vhost_tx_retries_max;
+            };
+            struct {
+                /* DPDK virtio_user index */
+                int virtio_user_index;
+                bool tap_multi_queue;
+            };
+        };
 
-        /* True if vHost device is 'up' and has been reconfigured at least once */
-        bool vhost_reconfigured;
-
-        atomic_uint8_t vhost_tx_retries_max;
         /* 2 pad bytes here. */
     );
 
@@ -1295,8 +1306,6 @@ common_construct(struct netdev *netdev, dpdk_port_t port_no,
     dev->requested_mtu = RTE_ETHER_MTU;
     dev->max_packet_len = MTU_TO_FRAME_LEN(dev->mtu);
     dev->requested_lsc_interrupt_mode = 0;
-    ovsrcu_index_init(&dev->vid, -1);
-    dev->vhost_reconfigured = false;
     dev->attached = false;
     dev->started = false;
     dev->reset_needed = false;
@@ -1345,6 +1354,8 @@ vhost_common_construct(struct netdev *netdev)
     int socket_id = rte_lcore_to_socket_id(rte_get_main_lcore());
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
 
+    ovsrcu_index_init(&dev->vid, -1);
+    dev->vhost_reconfigured = false;
     dev->vhost_rxq_enabled = dpdk_rte_mzalloc(OVS_VHOST_MAX_QUEUE_NUM *
                                               sizeof *dev->vhost_rxq_enabled);
     if (!dev->vhost_rxq_enabled) {
@@ -1456,6 +1467,32 @@ netdev_dpdk_vhost_client_construct(struct netdev *netdev)
         VLOG_ERR("vhost_common_construct failed for vhost user client"
                  "port: %s\n", netdev->name);
     }
+    ovs_mutex_unlock(&dpdk_mutex);
+    return err;
+}
+
+static int
+netdev_dpdk_virtio_user_construct(struct netdev *netdev)
+{
+    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
+    static int virtio_user_index;
+    int tap_fd;
+    int err;
+
+    ovs_mutex_lock(&dpdk_mutex);
+    err = common_construct(netdev, DPDK_ETH_PORT_ID_INVALID,
+                           DPDK_DEV_VIRTIO_USER, SOCKET0);
+    if (err) {
+        goto out;
+    }
+    err = linux_open_tap(netdev_get_name(netdev), &tap_fd, 0);
+    if (err) {
+        goto out;
+    }
+    dev->tap_multi_queue = linux_tap_supports_multi_queue(tap_fd);
+    close(tap_fd);
+    dev->virtio_user_index = virtio_user_index++;
+out:
     ovs_mutex_unlock(&dpdk_mutex);
     return err;
 }
@@ -1739,7 +1776,7 @@ netdev_dpdk_get_config(const struct netdev *netdev, struct smap *args)
     smap_add_format(args, "configured_tx_queues", "%d", netdev->n_txq);
     smap_add_format(args, "mtu", "%d", dev->mtu);
 
-    if (dev->type == DPDK_DEV_ETH) {
+    if (dev->type != DPDK_DEV_VHOST) {
         smap_add_format(args, "requested_rxq_descriptors", "%d",
                         dev->requested_rxq_size);
         smap_add_format(args, "configured_rxq_descriptors", "%d",
@@ -2121,12 +2158,153 @@ netdev_dpdk_vhost_client_set_config(struct netdev *netdev,
     return 0;
 }
 
+static char *
+netdev_dpdk_virtio_user_devargs(struct netdev_dpdk *dev)
+{
+    char *devargs;
+
+    devargs = xasprintf("net_virtio_user%u,iface=%s,path=/dev/vhost-net,"
+                        "queues=%u",
+                        dev->virtio_user_index, netdev_get_name(&dev->up),
+                        dev->requested_n_txq);
+    if (!eth_addr_is_zero(dev->hwaddr)) {
+        char *tmp_devargs = devargs;
+
+        devargs = xasprintf("%s,mac="ETH_ADDR_FMT, tmp_devargs,
+                            ETH_ADDR_ARGS(dev->hwaddr));
+        free(tmp_devargs);
+    }
+
+    return devargs;
+}
+
+static int
+netdev_dpdk_virtio_user_attach(struct netdev_dpdk *dev, char *devargs)
+    OVS_REQUIRES(dpdk_mutex)
+{
+    int err;
+
+    if (dev->devargs) {
+        struct rte_eth_dev_info dev_info;
+
+        if (dev->started) {
+            rte_eth_dev_stop(dev->port_id);
+            dev->started = false;
+        }
+
+        rte_eth_dev_info_get(dev->port_id, &dev_info);
+        rte_eth_dev_close(dev->port_id);
+        dev->port_id = DPDK_ETH_PORT_ID_INVALID;
+        if ((err = rte_dev_remove(dev_info.device)) != 0) {
+            err = -err;
+            VLOG_ERR("Device '%s' can not be detached: %s.",
+                      dev->devargs, rte_strerror(err));
+        } else {
+            VLOG_INFO("Device '%s' has been detached", dev->devargs);
+        }
+        dev->attached = false;
+        if (err) {
+            goto out;
+        }
+    }
+    free(dev->devargs);
+
+    dev->port_id = netdev_dpdk_process_devargs(dev, devargs, NULL);
+    if (!rte_eth_dev_is_valid_port(dev->port_id)) {
+        dev->port_id = DPDK_ETH_PORT_ID_INVALID;
+        dev->devargs = NULL;
+        err = EINVAL;
+        goto out;
+    }
+    dev->devargs = devargs;
+    err = 0;
+out:
+    return err;
+}
+
+static int
+netdev_dpdk_virtio_user_set_config(struct netdev *netdev,
+                                   const struct smap *args,
+                                   char **errp OVS_UNUSED)
+{
+    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
+    bool lsc_interrupt_mode;
+    char *new_devargs;
+    int queue_size;
+    int err;
+
+    ovs_mutex_lock(&dpdk_mutex);
+    ovs_mutex_lock(&dev->mutex);
+
+    dpdk_process_queue_size(netdev, args, "n_rxq_desc",
+                            NIC_PORT_DEFAULT_RXQ_SIZE,
+                            &dev->requested_rxq_size);
+    dpdk_process_queue_size(netdev, args, "n_txq_desc",
+                            NIC_PORT_DEFAULT_TXQ_SIZE,
+                            &dev->requested_txq_size);
+    queue_size = MAX(dev->requested_rxq_size, dev->requested_txq_size);
+    dev->requested_rxq_size = dev->requested_txq_size = queue_size;
+
+    lsc_interrupt_mode = smap_get_bool(args, "dpdk-lsc-interrupt", false);
+    if (dev->requested_lsc_interrupt_mode != lsc_interrupt_mode) {
+        dev->requested_lsc_interrupt_mode = lsc_interrupt_mode;
+        netdev_request_reconfigure(netdev);
+    }
+
+    new_devargs = netdev_dpdk_virtio_user_devargs(dev);
+    if (dev->devargs && !strcmp(new_devargs, dev->devargs)) {
+        free(new_devargs);
+        err = 0;
+        goto out;
+    }
+
+    err = netdev_dpdk_virtio_user_attach(dev, new_devargs);
+    if (err) {
+        free(new_devargs);
+        goto out;
+    }
+    netdev_request_reconfigure(netdev);
+out:
+    ovs_mutex_unlock(&dev->mutex);
+    ovs_mutex_unlock(&dpdk_mutex);
+
+    return err;
+}
+
 static int
 netdev_dpdk_get_numa_id(const struct netdev *netdev)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
 
     return dev->socket_id;
+}
+
+static int
+netdev_dpdk_virtio_user_set_tx_multiq(struct netdev *netdev,
+                                      unsigned int n_txq)
+{
+    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
+
+    ovs_mutex_lock(&dev->mutex);
+
+    if (!dev->tap_multi_queue && n_txq > 1) {
+        VLOG_WARN("%s: tap iface does not support multi queue, this can be "
+                  "fixed by deleting it and restarting OVS.",
+                  netdev_get_name(netdev));
+        n_txq = 1;
+    }
+    if (dev->requested_n_txq == n_txq) {
+        goto out;
+    }
+
+    /* vhost-net expects "symmetrical" setups with fully functionnal qp: if OVS
+     * asks for n txq, it must be prepared to receive traffic on n rxq. */
+    dev->requested_n_rxq = dev->requested_n_txq = n_txq;
+    netdev_request_reconfigure(netdev);
+
+out:
+    ovs_mutex_unlock(&dev->mutex);
+    return 0;
 }
 
 /* Sets the number of tx queues for the dpdk interface. */
@@ -2850,6 +3028,25 @@ netdev_dpdk_set_etheraddr(struct netdev *netdev, const struct eth_addr mac)
         err = netdev_dpdk_set_etheraddr__(dev, mac);
         if (!err) {
             netdev_change_seq_changed(netdev);
+        }
+    }
+    ovs_mutex_unlock(&dev->mutex);
+
+    return err;
+}
+
+static int
+netdev_dpdk_virtio_user_set_etheraddr(struct netdev *netdev,
+                                      const struct eth_addr mac)
+{
+    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
+    int err = 0;
+
+    ovs_mutex_lock(&dev->mutex);
+    if (!eth_addr_equals(dev->hwaddr, mac)) {
+        err = netdev_dpdk_set_etheraddr__(dev, mac);
+        if (!err) {
+            netdev_request_reconfigure(netdev);
         }
     }
     ovs_mutex_unlock(&dev->mutex);
@@ -5179,12 +5376,11 @@ static const struct dpdk_qos_ops trtcm_policer_ops = {
 };
 
 static int
-netdev_dpdk_reconfigure(struct netdev *netdev)
+netdev_dpdk_reconfigure__(struct netdev_dpdk *dev)
+    OVS_REQUIRES(dev->mutex)
 {
-    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
+    struct netdev *netdev = &dev->up;
     int err = 0;
-
-    ovs_mutex_lock(&dev->mutex);
 
     if (netdev->n_txq == dev->requested_n_txq
         && netdev->n_rxq == dev->requested_n_rxq
@@ -5204,7 +5400,7 @@ netdev_dpdk_reconfigure(struct netdev *netdev)
         rte_eth_dev_reset(dev->port_id);
         if_notifier_manual_report();
         dev->reset_needed = false;
-    } else {
+    } else if (dev->started) {
         rte_eth_dev_stop(dev->port_id);
     }
 
@@ -5263,6 +5459,17 @@ netdev_dpdk_reconfigure(struct netdev *netdev)
     netdev_change_seq_changed(netdev);
 
 out:
+    return err;
+}
+
+static int
+netdev_dpdk_reconfigure(struct netdev *netdev)
+{
+    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
+    int err;
+
+    ovs_mutex_lock(&dev->mutex);
+    err = netdev_dpdk_reconfigure__(dev);
     ovs_mutex_unlock(&dev->mutex);
     return err;
 }
@@ -5426,6 +5633,37 @@ netdev_dpdk_vhost_client_reconfigure(struct netdev *netdev)
 unlock:
     ovs_mutex_unlock(&dev->mutex);
 
+    return err;
+}
+
+static int
+netdev_dpdk_virtio_user_reconfigure(struct netdev *netdev)
+{
+    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
+    char *new_devargs;
+    int err;
+
+    ovs_mutex_lock(&dpdk_mutex);
+    ovs_mutex_lock(&dev->mutex);
+
+    new_devargs = netdev_dpdk_virtio_user_devargs(dev);
+    if (dev->devargs && !strcmp(new_devargs, dev->devargs)) {
+        free(new_devargs);
+        goto skip_attach;
+    }
+
+    err = netdev_dpdk_virtio_user_attach(dev, new_devargs);
+    if (err) {
+        free(new_devargs);
+        goto out;
+    }
+
+skip_attach:
+    err = netdev_dpdk_reconfigure__(dev);
+
+out:
+    ovs_mutex_unlock(&dev->mutex);
+    ovs_mutex_unlock(&dpdk_mutex);
     return err;
 }
 
@@ -5776,7 +6014,6 @@ parse_vhost_config(const struct smap *ovs_other_config)
     .dealloc = netdev_dpdk_dealloc,                         \
     .get_config = netdev_dpdk_get_config,                   \
     .get_numa_id = netdev_dpdk_get_numa_id,                 \
-    .set_etheraddr = netdev_dpdk_set_etheraddr,             \
     .get_etheraddr = netdev_dpdk_get_etheraddr,             \
     .get_mtu = netdev_dpdk_get_mtu,                         \
     .set_mtu = netdev_dpdk_set_mtu,                         \
@@ -5804,6 +6041,7 @@ parse_vhost_config(const struct smap *ovs_other_config)
     NETDEV_DPDK_CLASS_COMMON,                           \
     .init = netdev_dpdk_class_init,                     \
     .destruct = netdev_dpdk_destruct,                   \
+    .set_etheraddr = netdev_dpdk_set_etheraddr,         \
     .set_tx_multiq = netdev_dpdk_set_tx_multiq,         \
     .get_carrier = netdev_dpdk_get_carrier,             \
     .get_stats = netdev_dpdk_get_stats,                 \
@@ -5827,6 +6065,7 @@ static const struct netdev_class dpdk_vhost_class = {
     .init = netdev_dpdk_vhost_class_init,
     .construct = netdev_dpdk_vhost_construct,
     .destruct = netdev_dpdk_vhost_destruct,
+    .set_etheraddr = netdev_dpdk_set_etheraddr,
     .send = netdev_dpdk_vhost_send,
     .get_carrier = netdev_dpdk_vhost_get_carrier,
     .get_stats = netdev_dpdk_vhost_get_stats,
@@ -5844,6 +6083,7 @@ static const struct netdev_class dpdk_vhost_client_class = {
     .construct = netdev_dpdk_vhost_client_construct,
     .destruct = netdev_dpdk_vhost_destruct,
     .set_config = netdev_dpdk_vhost_client_set_config,
+    .set_etheraddr = netdev_dpdk_set_etheraddr,
     .send = netdev_dpdk_vhost_send,
     .get_carrier = netdev_dpdk_vhost_get_carrier,
     .get_stats = netdev_dpdk_vhost_get_stats,
@@ -5852,6 +6092,24 @@ static const struct netdev_class dpdk_vhost_client_class = {
     .reconfigure = netdev_dpdk_vhost_client_reconfigure,
     .rxq_recv = netdev_dpdk_vhost_rxq_recv,
     .rxq_enabled = netdev_dpdk_vhost_rxq_enabled,
+};
+
+static const struct netdev_class dpdk_virtio_user_class = {
+    .type = "dpdkvirtiouser",
+    NETDEV_DPDK_CLASS_COMMON,
+    .construct = netdev_dpdk_virtio_user_construct,
+    .destruct = netdev_dpdk_destruct,
+    .set_config = netdev_dpdk_virtio_user_set_config,
+    .reconfigure = netdev_dpdk_virtio_user_reconfigure,
+    .set_etheraddr = netdev_dpdk_virtio_user_set_etheraddr,
+    .set_tx_multiq = netdev_dpdk_virtio_user_set_tx_multiq,
+    .get_carrier = netdev_dpdk_get_carrier,
+    .get_stats = netdev_dpdk_get_stats,
+    .get_custom_stats = netdev_dpdk_get_custom_stats,
+    .get_features = netdev_dpdk_get_features,
+    .get_status = netdev_dpdk_get_status,
+    .rxq_recv = netdev_dpdk_rxq_recv,
+    .send = netdev_dpdk_eth_send,
 };
 
 void
@@ -5864,4 +6122,5 @@ netdev_dpdk_register(const struct smap *ovs_other_config)
     netdev_register_provider(&dpdk_class);
     netdev_register_provider(&dpdk_vhost_class);
     netdev_register_provider(&dpdk_vhost_client_class);
+    netdev_register_provider(&dpdk_virtio_user_class);
 }
