@@ -37,7 +37,7 @@ m4_define([OVS_DPDK_PRE_PHY_SKIP],
 #
 # Create an empty database and start ovsdb-server. Add special configuration
 # dpdk-init to enable DPDK functionality. Start ovs-vswitchd connected to that
-# database using system devices (no dummies).
+# database using system devices.
 #
 m4_define([OVS_DPDK_START],
   [dnl Create database.
@@ -59,7 +59,7 @@ m4_define([OVS_DPDK_START],
    AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-init=true])
 
    dnl Start ovs-vswitchd.
-   AT_CHECK([ovs-vswitchd --detach --no-chdir --pidfile --log-file -vvconn -vofproto_dpif -vunixctl], [0], [stdout], [stderr])
+   AT_CHECK([ovs-vswitchd --enable-dummy --detach --no-chdir --pidfile --log-file -vvconn -vofproto_dpif -vunixctl], [0], [stdout], [stderr])
    AT_CAPTURE_FILE([ovs-vswitchd.log])
    on_exit "kill_ovs_vswitchd `cat ovs-vswitchd.pid`"
 ])
