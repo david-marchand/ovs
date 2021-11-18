@@ -192,6 +192,7 @@ SYSTEM_OFFLOADS_TESTSUITE_AT = \
 
 SYSTEM_DPDK_TESTSUITE_AT = \
 	tests/system-common-macros.at \
+	tests/system-dpdk-find-device.py \
 	tests/system-dpdk-macros.at \
 	tests/system-dpdk-testsuite.at \
 	tests/system-dpdk.at
