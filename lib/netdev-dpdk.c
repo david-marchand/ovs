@@ -192,6 +192,13 @@ static const struct rte_vhost_device_ops virtio_net_device_ops =
     .guest_notified = vhost_guest_notified,
 };
 
+/* Custom software per-queue stats for vhost ports */
+struct netdev_dpdk_vhost_q_stats {
+    uint64_t bytes;
+    uint64_t packets;
+    uint64_t errors;
+};
+
 /* Custom software stats for dpdk ports */
 struct netdev_dpdk_sw_stats {
     /* No. of retries when unable to transmit. */
@@ -479,9 +486,12 @@ struct netdev_dpdk {
     PADDED_MEMBERS(CACHE_LINE_SIZE,
         struct netdev_stats stats;
         struct netdev_dpdk_sw_stats *sw_stats;
+        /* Per-queue vhost Tx stats */
+        struct netdev_dpdk_vhost_q_stats *vhost_txq_stats;
+        /* Per-queue vhost Rx stats */
+        struct netdev_dpdk_vhost_q_stats *vhost_rxq_stats;
         /* Protects stats */
         rte_spinlock_t stats_lock;
-        /* 36 pad bytes here. */
     );
 
     PADDED_MEMBERS(CACHE_LINE_SIZE,
@@ -1278,6 +1288,13 @@ common_construct(struct netdev *netdev, dpdk_port_t port_no,
 
     dev->sw_stats = xzalloc(sizeof *dev->sw_stats);
     dev->sw_stats->tx_retries = (dev->type == DPDK_DEV_VHOST) ? 0 : UINT64_MAX;
+
+    if (dev->type == DPDK_DEV_VHOST) {
+        dev->vhost_txq_stats = xcalloc(netdev->n_txq,
+                                     sizeof *dev->vhost_txq_stats);
+        dev->vhost_rxq_stats = xcalloc(netdev->n_rxq,
+                                     sizeof *dev->vhost_rxq_stats);
+    }
 
     return 0;
 }
@@ -2332,17 +2349,21 @@ netdev_dpdk_vhost_update_rx_size_counters(struct netdev_stats *stats,
 }
 
 static inline void
-netdev_dpdk_vhost_update_rx_counters(struct netdev_dpdk *dev,
+netdev_dpdk_vhost_update_rx_counters(struct netdev_dpdk *dev, int qid,
                                      struct dp_packet **packets, int count,
                                      int qos_drops)
 {
+    struct netdev_dpdk_vhost_q_stats *q_stats = &dev->vhost_rxq_stats[qid];
     struct netdev_stats *stats = &dev->stats;
     struct dp_packet *packet;
     unsigned int packet_size;
     int i;
 
     stats->rx_packets += count;
+    q_stats->packets += count;
     stats->rx_dropped += qos_drops;
+    q_stats->errors += qos_drops;
+
     for (i = 0; i < count; i++) {
         packet = packets[i];
         packet_size = dp_packet_size(packet);
@@ -2353,6 +2374,7 @@ netdev_dpdk_vhost_update_rx_counters(struct netdev_dpdk *dev,
              * further processing. */
             stats->rx_errors++;
             stats->rx_length_errors++;
+            q_stats->errors++;
             continue;
         }
 
@@ -2364,6 +2386,7 @@ netdev_dpdk_vhost_update_rx_counters(struct netdev_dpdk *dev,
         }
 
         stats->rx_bytes += packet_size;
+        q_stats->bytes += packet_size;
     }
 
     if (OVS_UNLIKELY(qos_drops)) {
@@ -2416,7 +2439,7 @@ netdev_dpdk_vhost_rxq_recv(struct netdev_rxq *rxq,
     }
 
     rte_spinlock_lock(&dev->stats_lock);
-    netdev_dpdk_vhost_update_rx_counters(dev, batch->packets,
+    netdev_dpdk_vhost_update_rx_counters(dev, rxq->queue_id, batch->packets,
                                          nb_rx, qos_drops);
     rte_spinlock_unlock(&dev->stats_lock);
 
@@ -2530,11 +2553,12 @@ netdev_dpdk_filter_packet_len(struct netdev_dpdk *dev, struct rte_mbuf **pkts,
 }
 
 static inline void
-netdev_dpdk_vhost_update_tx_counters(struct netdev_dpdk *dev,
+netdev_dpdk_vhost_update_tx_counters(struct netdev_dpdk *dev, int qid,
                                      struct dp_packet **packets,
                                      int attempted,
                                      struct netdev_dpdk_sw_stats *sw_stats_add)
 {
+    struct netdev_dpdk_vhost_q_stats *q_stats = &dev->vhost_txq_stats[qid];
     int dropped = sw_stats_add->tx_mtu_exceeded_drops +
                   sw_stats_add->tx_qos_drops +
                   sw_stats_add->tx_failure_drops +
@@ -2544,10 +2568,15 @@ netdev_dpdk_vhost_update_tx_counters(struct netdev_dpdk *dev,
     int i;
 
     stats->tx_packets += sent;
+    q_stats->packets += sent;
     stats->tx_dropped += dropped;
+    q_stats->errors += dropped;
 
     for (i = 0; i < sent; i++) {
-        stats->tx_bytes += dp_packet_size(packets[i]);
+        uint64_t bytes = dp_packet_size(packets[i]);
+
+        stats->tx_bytes += bytes;
+        q_stats->bytes += bytes;
     }
 
     if (OVS_UNLIKELY(dropped || sw_stats_add->tx_retries)) {
@@ -2635,7 +2664,7 @@ __netdev_dpdk_vhost_send(struct netdev *netdev, int qid,
     sw_stats_add.tx_retries = MIN(retries, max_retries);
 
     rte_spinlock_lock(&dev->stats_lock);
-    netdev_dpdk_vhost_update_tx_counters(dev, pkts, total_packets,
+    netdev_dpdk_vhost_update_tx_counters(dev, qid, pkts, total_packets,
                                          &sw_stats_add);
     rte_spinlock_unlock(&dev->stats_lock);
 
@@ -3263,6 +3292,76 @@ netdev_dpdk_get_sw_custom_stats(const struct netdev *netdev,
 }
 
 static int
+netdev_dpdk_vhost_get_custom_stats(const struct netdev *netdev,
+                                struct netdev_custom_stats *custom_stats)
+{
+    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
+    int sw_stats_size, i, j;
+
+    netdev_dpdk_get_sw_custom_stats(netdev, custom_stats);
+
+    ovs_mutex_lock(&dev->mutex);
+
+#define VHOST_Q_STATS \
+    VHOST_Q_STAT(bytes) \
+    VHOST_Q_STAT(packets) \
+    VHOST_Q_STAT(errors)
+
+    sw_stats_size = custom_stats->size;
+#define VHOST_Q_STAT(NAME) + netdev->n_rxq
+    custom_stats->size += VHOST_Q_STATS;
+#undef VHOST_Q_STAT
+#define VHOST_Q_STAT(NAME) + netdev->n_txq
+    custom_stats->size += VHOST_Q_STATS;
+#undef VHOST_Q_STAT
+    custom_stats->counters = xrealloc(custom_stats->counters,
+                                      custom_stats->size *
+                                      sizeof *custom_stats->counters);
+
+    j = 0;
+    for (i = 0; i < netdev->n_rxq; i++) {
+#define VHOST_Q_STAT(NAME) \
+        snprintf(custom_stats->counters[sw_stats_size + j++].name, \
+                NETDEV_CUSTOM_STATS_NAME_SIZE, "rx_q%d_"#NAME, i);
+        VHOST_Q_STATS
+#undef VHOST_Q_STAT
+    }
+
+    for (i = 0; i < netdev->n_txq; i++) {
+#define VHOST_Q_STAT(NAME) \
+        snprintf(custom_stats->counters[sw_stats_size + j++].name, \
+                NETDEV_CUSTOM_STATS_NAME_SIZE, "tx_q%d_"#NAME, i);
+        VHOST_Q_STATS
+#undef VHOST_Q_STAT
+    }
+
+    rte_spinlock_lock(&dev->stats_lock);
+
+    j = 0;
+    for (i = 0; i < netdev->n_rxq; i++) {
+#define VHOST_Q_STAT(NAME) \
+        custom_stats->counters[sw_stats_size + j++].value = \
+                dev->vhost_rxq_stats[i].NAME;
+        VHOST_Q_STATS
+#undef VHOST_Q_STAT
+    }
+
+    for (i = 0; i < netdev->n_txq; i++) {
+#define VHOST_Q_STAT(NAME) \
+        custom_stats->counters[sw_stats_size + j++].value = \
+                dev->vhost_txq_stats[i].NAME;
+        VHOST_Q_STATS
+#undef VHOST_Q_STAT
+    }
+
+    rte_spinlock_unlock(&dev->stats_lock);
+
+    ovs_mutex_unlock(&dev->mutex);
+
+    return 0;
+}
+
+static int
 netdev_dpdk_get_features(const struct netdev *netdev,
                          enum netdev_features *current,
                          enum netdev_features *advertised,
@@ -3531,6 +3630,11 @@ netdev_dpdk_update_flags__(struct netdev_dpdk *dev,
             if (NETDEV_UP & on) {
                 rte_spinlock_lock(&dev->stats_lock);
                 memset(&dev->stats, 0, sizeof dev->stats);
+                memset(dev->sw_stats, 0, sizeof *dev->sw_stats);
+                memset(dev->vhost_rxq_stats, 0,
+                        dev->up.n_rxq * sizeof *dev->vhost_rxq_stats);
+                memset(dev->vhost_txq_stats, 0,
+                        dev->up.n_txq * sizeof *dev->vhost_txq_stats);
                 rte_spinlock_unlock(&dev->stats_lock);
             }
         }
@@ -5023,9 +5127,12 @@ static int
 dpdk_vhost_reconfigure_helper(struct netdev_dpdk *dev)
     OVS_REQUIRES(dev->mutex)
 {
+    int old_n_txq = dev->up.n_txq;
+    int old_n_rxq = dev->up.n_rxq;
+    int err;
+
     dev->up.n_txq = dev->requested_n_txq;
     dev->up.n_rxq = dev->requested_n_rxq;
-    int err;
 
     /* Always keep RX queue 0 enabled for implementations that won't
      * report vring states. */
@@ -5042,6 +5149,30 @@ dpdk_vhost_reconfigure_helper(struct netdev_dpdk *dev)
     }
 
     netdev_dpdk_remap_txqs(dev);
+
+    /* Reset all stats if number of queues changed. */
+    if (dev->up.n_txq != old_n_txq || dev->up.n_rxq != old_n_rxq) {
+        struct netdev_dpdk_vhost_q_stats *old_txq_stats, *new_txq_stats;
+        struct netdev_dpdk_vhost_q_stats *old_rxq_stats, *new_rxq_stats;
+
+        new_txq_stats = xcalloc(dev->up.n_txq, sizeof *dev->vhost_txq_stats);
+        new_rxq_stats = xcalloc(dev->up.n_rxq, sizeof *dev->vhost_rxq_stats);
+
+        rte_spinlock_lock(&dev->stats_lock);
+
+        memset(&dev->stats, 0, sizeof dev->stats);
+        memset(dev->sw_stats, 0, sizeof *dev->sw_stats);
+
+        old_txq_stats = dev->vhost_txq_stats;
+        dev->vhost_txq_stats = new_txq_stats;
+        old_rxq_stats = dev->vhost_rxq_stats;
+        dev->vhost_rxq_stats = new_rxq_stats;
+
+        rte_spinlock_unlock(&dev->stats_lock);
+
+        free(old_txq_stats);
+        free(old_rxq_stats);
+    }
 
     err = netdev_dpdk_mempool_configure(dev);
     if (!err) {
@@ -5447,7 +5578,7 @@ static const struct netdev_class dpdk_vhost_class = {
     .send = netdev_dpdk_vhost_send,
     .get_carrier = netdev_dpdk_vhost_get_carrier,
     .get_stats = netdev_dpdk_vhost_get_stats,
-    .get_custom_stats = netdev_dpdk_get_sw_custom_stats,
+    .get_custom_stats = netdev_dpdk_vhost_get_custom_stats,
     .get_status = netdev_dpdk_vhost_user_get_status,
     .reconfigure = netdev_dpdk_vhost_reconfigure,
     .rxq_recv = netdev_dpdk_vhost_rxq_recv,
@@ -5463,7 +5594,7 @@ static const struct netdev_class dpdk_vhost_client_class = {
     .send = netdev_dpdk_vhost_send,
     .get_carrier = netdev_dpdk_vhost_get_carrier,
     .get_stats = netdev_dpdk_vhost_get_stats,
-    .get_custom_stats = netdev_dpdk_get_sw_custom_stats,
+    .get_custom_stats = netdev_dpdk_vhost_get_custom_stats,
     .get_status = netdev_dpdk_vhost_user_get_status,
     .reconfigure = netdev_dpdk_vhost_client_reconfigure,
     .rxq_recv = netdev_dpdk_vhost_rxq_recv,
