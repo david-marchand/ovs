@@ -268,6 +268,9 @@ struct dp_netdev {
     /* The time that a packet can wait in output batch for sending. */
     atomic_uint32_t tx_flush_interval;
 
+    /* The time before PMD threads sleep when receiving no traffic. */
+    atomic_uint32_t rx_idle_threshold;
+
     /* Meters. */
     struct ovs_mutex meters_lock;
     struct cmap meters OVS_GUARDED;
@@ -4924,6 +4927,22 @@ dpif_netdev_set_config(struct dpif *dpif, const struct smap *other_config)
     bool autolb_state = smap_get_bool(other_config, "pmd-auto-lb", false);
 
     set_pmd_auto_lb(dp, autolb_state, log_autolb);
+
+    uint32_t rx_idle_threshold = smap_get_int(other_config,
+                                              "rx-idle-threshold", 0);
+    uint32_t cur_rx_idle_threshold;
+
+    atomic_read_relaxed(&dp->rx_idle_threshold, &cur_rx_idle_threshold);
+    if (cur_rx_idle_threshold != rx_idle_threshold) {
+        if (rx_idle_threshold != 0) {
+            VLOG_INFO("PMD will sleep after %"PRIu32" ms of empty polling.",
+                      rx_idle_threshold);
+        } else {
+            VLOG_INFO("PMD will not sleep.");
+        }
+        atomic_store_relaxed(&dp->rx_idle_threshold, rx_idle_threshold);
+    }
+
     return 0;
 }
 
@@ -5267,6 +5286,24 @@ dp_netdev_pmd_flush_output_on_port(struct dp_netdev_pmd_thread *pmd,
     }
 
     return output_cnt;
+}
+
+static long long int
+dp_netdev_pmd_next_flush(struct dp_netdev_pmd_thread *pmd)
+{
+    long long int next_flush = LLONG_MAX;
+
+    if (pmd->n_output_batches) {
+        struct tx_port *p;
+
+        HMAP_FOR_EACH (p, node, &pmd->send_port_cache) {
+            if (!dp_packet_batch_is_empty(&p->output_pkts)
+                && next_flush > p->flush_time) {
+                next_flush = p->flush_time;
+            }
+        }
+    }
+    return next_flush;
 }
 
 static int
@@ -6851,10 +6888,12 @@ pmd_thread_main(void *f_)
     struct dp_netdev_pmd_thread *pmd = f_;
     struct pmd_perf_stats *s = &pmd->perf_stats;
     unsigned int lc = 0;
+    long long int empty_polling_start;
     struct polled_queue *poll_list;
     bool wait_for_reload = false;
     bool dpdk_attached;
     bool reload_tx_qid;
+    bool rxq_can_wait;
     bool exiting;
     bool reload;
     int poll_cnt;
@@ -6873,6 +6912,8 @@ pmd_thread_main(void *f_)
 
 reload:
     atomic_count_init(&pmd->pmd_overloaded, 0);
+    rxq_can_wait = false;
+    empty_polling_start = LLONG_MAX;
 
     if (!dpdk_attached) {
         dpdk_attached = dpdk_attach_thread(pmd->core_id);
@@ -6944,11 +6985,50 @@ reload:
         }
 
         if (!rx_packets) {
+            uint32_t rx_idle_threshold;
+
             /* We didn't receive anything in the process loop.
              * Check if we need to send something.
              * There was no time updates on current iteration. */
             pmd_thread_ctx_time_update(pmd);
             tx_packets = dp_netdev_pmd_flush_output_packets(pmd, false);
+            atomic_read_relaxed(&pmd->dp->rx_idle_threshold,
+                                &rx_idle_threshold);
+
+            if (rxq_can_wait && rx_idle_threshold) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
+
+                if (pmd->ctx.now <= empty_polling_start) {
+                    empty_polling_start = pmd->ctx.now;
+                } else if (pmd->ctx.now > empty_polling_start
+                                 + 1000 * rx_idle_threshold) {
+                    long long int next_wakeup;
+
+                    VLOG_DBG_RL(&rl, "No packet in last %lld ms, sleeping.",
+                                (pmd->ctx.now - empty_polling_start) / 1000);
+                    for (i = 0; i < poll_cnt; i++) {
+                        if (!poll_list[i].rxq_enabled) {
+                            continue;
+                        }
+                        netdev_rxq_wait(poll_list[i].rxq->rx);
+                    }
+                    next_wakeup = dp_netdev_pmd_next_flush(pmd);
+                    next_wakeup = MIN(next_wakeup, pmd->next_cycle_store);
+                    next_wakeup = MIN(next_wakeup, pmd->next_optimization);
+                    /* ms granularity is not precise enough and the PMD might
+                     * end up on a busy loop of calls to poll() with a 0ms
+                     * timeout. Let's wait for one more ms. */
+                    next_wakeup = next_wakeup / 1000 + 1;
+                    poll_timer_wait_until(next_wakeup);
+                    seq_wait(pmd->reload_seq, pmd->last_reload_seq);
+                    poll_block();
+                    if (time_usec() >= next_wakeup) {
+                        lc = 1024;
+                    }
+                }
+            }
+        } else {
+            empty_polling_start = LLONG_MAX;
         }
 
         /* Do RCU synchronization at fixed interval.  This ensures that
@@ -6961,7 +7041,7 @@ reload:
             }
         }
 
-        if (lc++ > 1024) {
+        if (lc++ >= 1024) {
             lc = 0;
 
             coverage_try_clear();
@@ -6972,6 +7052,7 @@ reload:
                     pmd->ctx.now + PMD_RCU_QUIESCE_INTERVAL;
             }
 
+            rxq_can_wait = true;
             for (i = 0; i < poll_cnt; i++) {
                 uint64_t current_seq =
                          netdev_get_change_seq(poll_list[i].rxq->port->netdev);
@@ -6979,6 +7060,9 @@ reload:
                     poll_list[i].change_seq = current_seq;
                     poll_list[i].rxq_enabled =
                                  netdev_rxq_enabled(poll_list[i].rxq->rx);
+                }
+                if (poll_list[i].rxq_enabled) {
+                    rxq_can_wait &= netdev_rxq_can_wait(poll_list[i].rxq->rx);
                 }
             }
         }

@@ -733,6 +733,15 @@ netdev_rxq_recv(struct netdev_rxq *rx, struct dp_packet_batch *batch,
     return retval;
 }
 
+bool
+netdev_rxq_can_wait(struct netdev_rxq *rx)
+{
+    return rx->netdev->netdev_class->rxq_wait &&
+        (rx->netdev->netdev_class->rxq_can_wait
+         ? rx->netdev->netdev_class->rxq_can_wait(rx)
+         : true);
+}
+
 /* Arranges for poll_block() to wake up when a packet is ready to be received
  * on 'rx'. */
 void

@@ -831,6 +831,14 @@ struct netdev_class {
      * netdev_rxq_recv() on 'rx'. */
     void (*rxq_wait)(struct netdev_rxq *rx);
 
+    /* For some netdev (DPDK), marked with .is_pmd = true, there might be
+     * cases where a PMD thread being able to call netdev_rxq_wait() is a
+     * wanted feature.
+     * Yet, the netdev might lack a way to know this feature is available
+     * until runtime.
+     */
+    bool (*rxq_can_wait)(struct netdev_rxq *rx);
+
     /* Discards all packets waiting to be received from 'rx'. */
     int (*rxq_drain)(struct netdev_rxq *rx);
 

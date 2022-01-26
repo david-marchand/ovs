@@ -193,6 +193,7 @@ int netdev_rxq_get_queue_id(const struct netdev_rxq *);
 
 int netdev_rxq_recv(struct netdev_rxq *rx, struct dp_packet_batch *,
                     int *qfill);
+bool netdev_rxq_can_wait(struct netdev_rxq *);
 void netdev_rxq_wait(struct netdev_rxq *);
 int netdev_rxq_drain(struct netdev_rxq *);
 

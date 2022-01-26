@@ -54,6 +54,7 @@
 #include "openvswitch/list.h"
 #include "openvswitch/match.h"
 #include "openvswitch/ofp-print.h"
+#include "openvswitch/poll-loop.h"
 #include "openvswitch/shash.h"
 #include "openvswitch/vlog.h"
 #include "ovs-numa.h"
@@ -473,8 +474,9 @@ struct netdev_dpdk {
         uint32_t policer_rate;
         uint32_t policer_burst;
 
-        /* Array of vhost rxq states, see vring_state_changed. */
-        bool *vhost_rxq_enabled;
+        /* See vring_state_changed. */
+        struct netdev_dpdk_vhost_rxq *vhost_rxq;
+        struct seq *vhost_state_seq;
     );
 
     PADDED_MEMBERS(CACHE_LINE_SIZE,
@@ -518,6 +520,9 @@ struct netdev_dpdk {
         bool requested_lsc_interrupt_mode;
         bool lsc_interrupt_mode;
 
+        /* Property for rx interrupt support. */
+        bool rxq_interrupt_mode;
+
         /* VF configuration. */
         struct eth_addr requested_hwaddr;
     );
@@ -534,6 +539,14 @@ struct netdev_dpdk {
 struct netdev_rxq_dpdk {
     struct netdev_rxq up;
     dpdk_port_t port_id;
+    bool waiting;
+    int fd;
+};
+
+struct netdev_dpdk_vhost_rxq {
+    bool enabled;
+    int pending_fd;
+    uint64_t last_change_seq;
 };
 
 static void netdev_dpdk_destruct(struct netdev *netdev);
@@ -974,6 +987,7 @@ dpdk_eth_dev_port_config(struct netdev_dpdk *dev, int n_rxq, int n_txq)
     }
 
     conf.intr_conf.lsc = dev->lsc_interrupt_mode;
+    conf.intr_conf.rxq = dev->rxq_interrupt_mode;
 
     if (dev->hw_ol_features & NETDEV_RX_CHECKSUM_OFFLOAD) {
         conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_CHECKSUM;
@@ -1007,7 +1021,8 @@ dpdk_eth_dev_port_config(struct netdev_dpdk *dev, int n_rxq, int n_txq)
      * and request less queues */
     while (n_rxq && n_txq) {
         if (diag) {
-            VLOG_INFO("Retrying setup with (rxq:%d txq:%d)", n_rxq, n_txq);
+            VLOG_INFO("Retrying setup with (rxq:%d txq:%d%s)", n_rxq, n_txq,
+                      conf.intr_conf.rxq != 0 ? ", rx interrupts" : "");
         }
 
         diag = rte_eth_dev_configure(dev->port_id, n_rxq, n_txq, &conf);
@@ -1145,8 +1160,20 @@ dpdk_eth_dev_init(struct netdev_dpdk *dev)
     n_rxq = MIN(info.max_rx_queues, dev->up.n_rxq);
     n_txq = MIN(info.max_tx_queues, dev->up.n_txq);
 
+    dev->rxq_interrupt_mode = true;
+
+retry_without_rx_interrupt:
     diag = dpdk_eth_dev_port_config(dev, n_rxq, n_txq);
     if (diag) {
+        if (dev->rxq_interrupt_mode) {
+            VLOG_INFO("Interface %s(rxq:%d txq:%d lsc interrupt mode:%s) "
+                     "configure error with rx interrupts: %s",
+                     dev->up.name, n_rxq, n_txq,
+                     dev->lsc_interrupt_mode ? "true" : "false",
+                     rte_strerror(-diag));
+            dev->rxq_interrupt_mode = false;
+            goto retry_without_rx_interrupt;
+        }
         VLOG_ERR("Interface %s(rxq:%d txq:%d lsc interrupt mode:%s) "
                  "configure error: %s",
                  dev->up.name, n_rxq, n_txq,
@@ -1157,6 +1184,12 @@ dpdk_eth_dev_init(struct netdev_dpdk *dev)
 
     diag = rte_eth_dev_start(dev->port_id);
     if (diag) {
+        if (dev->rxq_interrupt_mode) {
+            VLOG_INFO("Interface %s start error with rx interrupts: %s",
+                     dev->up.name, rte_strerror(-diag));
+            dev->rxq_interrupt_mode = false;
+            goto retry_without_rx_interrupt;
+        }
         VLOG_ERR("Interface %s start error: %s", dev->up.name,
                  rte_strerror(-diag));
         return -diag;
@@ -1283,6 +1316,22 @@ common_construct(struct netdev *netdev, dpdk_port_t port_no,
     return 0;
 }
 
+static struct netdev_dpdk_vhost_rxq *
+netdev_dpdk_vhost_alloc_rxq(void)
+{
+    const unsigned int n_rxq = OVS_VHOST_MAX_QUEUE_NUM;
+    struct netdev_dpdk_vhost_rxq *rxqs;
+
+    rxqs = dpdk_rte_mzalloc(n_rxq * sizeof *rxqs);
+    if (rxqs) {
+        for (unsigned int i = 0; i < n_rxq; i++) {
+            rxqs[i].pending_fd = -1;
+        }
+    }
+
+    return rxqs;
+}
+
 static int
 vhost_common_construct(struct netdev *netdev)
     OVS_REQUIRES(dpdk_mutex)
@@ -1290,17 +1339,17 @@ vhost_common_construct(struct netdev *netdev)
     int socket_id = rte_lcore_to_socket_id(rte_get_main_lcore());
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
 
-    dev->vhost_rxq_enabled = dpdk_rte_mzalloc(OVS_VHOST_MAX_QUEUE_NUM *
-                                              sizeof *dev->vhost_rxq_enabled);
-    if (!dev->vhost_rxq_enabled) {
+    dev->vhost_rxq = netdev_dpdk_vhost_alloc_rxq();
+    if (!dev->vhost_rxq) {
         return ENOMEM;
     }
     dev->tx_q = netdev_dpdk_alloc_txq(OVS_VHOST_MAX_QUEUE_NUM);
     if (!dev->tx_q) {
-        rte_free(dev->vhost_rxq_enabled);
+        rte_free(dev->vhost_rxq);
+        dev->vhost_rxq = NULL;
         return ENOMEM;
     }
-
+    dev->vhost_state_seq = seq_create();
     atomic_init(&dev->vhost_tx_retries_max, VHOST_ENQ_RETRY_DEF);
 
     return common_construct(netdev, DPDK_ETH_PORT_ID_INVALID,
@@ -1533,7 +1582,10 @@ netdev_dpdk_vhost_destruct(struct netdev *netdev)
 
     vhost_id = dev->vhost_id;
     dev->vhost_id = NULL;
-    rte_free(dev->vhost_rxq_enabled);
+    seq_destroy(dev->vhost_state_seq);
+    dev->vhost_state_seq = NULL;
+    rte_free(dev->vhost_rxq);
+    dev->vhost_rxq = NULL;
 
     common_destruct(dev);
 
@@ -1705,6 +1757,8 @@ netdev_dpdk_get_config(const struct netdev *netdev, struct smap *args)
         }
         smap_add(args, "lsc_interrupt_mode",
                  dev->lsc_interrupt_mode ? "true" : "false");
+        smap_add(args, "rxq_interrupt_mode",
+                 dev->rxq_interrupt_mode ? "true" : "false");
 
         if (dpdk_port_is_representor(dev)) {
             smap_add_format(args, "dpdk-vf-mac", ETH_ADDR_FMT,
@@ -2120,6 +2174,15 @@ netdev_dpdk_rxq_construct(struct netdev_rxq *rxq)
 
     ovs_mutex_lock(&dev->mutex);
     rx->port_id = dev->port_id;
+    rx->waiting = false;
+    rx->fd = -1;
+    if (dev->type == DPDK_DEV_ETH && dev->rxq_interrupt_mode) {
+        rx->fd = rte_eth_dev_rx_intr_ctl_q_get_fd(rx->port_id, rxq->queue_id);
+        if (rx->fd < 0) {
+            VLOG_WARN("Rx interrupts are broken for device %s rxq %d.",
+                      dev->up.name, rxq->queue_id);
+        }
+    }
     ovs_mutex_unlock(&dev->mutex);
 
     return 0;
@@ -2379,6 +2442,7 @@ static int
 netdev_dpdk_vhost_rxq_recv(struct netdev_rxq *rxq,
                            struct dp_packet_batch *batch, int *qfill)
 {
+    struct netdev_rxq_dpdk *rx = netdev_rxq_dpdk_cast(rxq);
     struct netdev_dpdk *dev = netdev_dpdk_cast(rxq->netdev);
     struct ingress_policer *policer = netdev_dpdk_get_ingress_policer(dev);
     uint16_t nb_rx = 0;
@@ -2389,6 +2453,18 @@ netdev_dpdk_vhost_rxq_recv(struct netdev_rxq *rxq,
     if (OVS_UNLIKELY(vid < 0 || !dev->vhost_reconfigured
                      || !(dev->flags & NETDEV_UP))) {
         return EAGAIN;
+    }
+
+    if (OVS_UNLIKELY(rx->waiting)) {
+        ssize_t retval;
+
+        rx->waiting = false;
+        rte_vhost_enable_guest_notification(vid, qid, false);
+        do {
+            uint64_t buf;
+
+            retval = read(rx->fd, &buf, sizeof buf);
+        } while (retval < 0 && errno == EINTR);
     }
 
     nb_rx = rte_vhost_dequeue_burst(vid, qid, dev->dpdk_mp->mp,
@@ -2432,7 +2508,7 @@ netdev_dpdk_vhost_rxq_enabled(struct netdev_rxq *rxq)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(rxq->netdev);
 
-    return dev->vhost_rxq_enabled[rxq->queue_id];
+    return dev->vhost_rxq[rxq->queue_id].enabled;
 }
 
 static int
@@ -2447,6 +2523,18 @@ netdev_dpdk_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
 
     if (OVS_UNLIKELY(!(dev->flags & NETDEV_UP))) {
         return EAGAIN;
+    }
+
+    if (OVS_UNLIKELY(rx->waiting)) {
+        ssize_t retval;
+
+        rx->waiting = false;
+        rte_eth_dev_rx_intr_disable(rx->port_id, rxq->queue_id);
+        do {
+            uint64_t buf;
+
+            retval = read(rx->fd, &buf, sizeof buf);
+        } while (retval < 0 && errno == EINTR);
     }
 
     nb_rx = rte_eth_rx_burst(rx->port_id, rxq->queue_id,
@@ -2484,6 +2572,44 @@ netdev_dpdk_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
     }
 
     return 0;
+}
+
+static bool
+netdev_dpdk_rxq_can_wait(struct netdev_rxq *rxq)
+{
+    struct netdev_rxq_dpdk *rx = netdev_rxq_dpdk_cast(rxq);
+
+    return rx->fd >= 0;
+}
+
+static void
+netdev_dpdk_rxq_wait(struct netdev_rxq *rxq)
+{
+    struct netdev_rxq_dpdk *rx = netdev_rxq_dpdk_cast(rxq);
+
+    poll_fd_wait(rx->fd, POLLIN);
+    rx->waiting = true;
+    rte_eth_dev_rx_intr_enable(rx->port_id, rxq->queue_id);
+}
+
+static void
+netdev_dpdk_vhost_rxq_wait(struct netdev_rxq *rxq)
+{
+    struct netdev_rxq_dpdk *rx = netdev_rxq_dpdk_cast(rxq);
+    struct netdev_dpdk *dev = netdev_dpdk_cast(rxq->netdev);
+    struct netdev_dpdk_vhost_rxq *vhost_rxq = &dev->vhost_rxq[rxq->queue_id];
+    int vid = netdev_dpdk_get_vid(dev);
+
+    vhost_rxq->last_change_seq = seq_read(dev->vhost_state_seq);
+    seq_wait(dev->vhost_state_seq, vhost_rxq->last_change_seq);
+    rx->fd = vhost_rxq->pending_fd;
+    if (vid >= 0 && rx->fd >= 0) {
+        int qid = rxq->queue_id * VIRTIO_QNUM + VIRTIO_TXQ;
+
+        poll_fd_wait(rx->fd, POLLIN);
+        rx->waiting = true;
+        rte_vhost_enable_guest_notification(vid, qid, true);
+    }
 }
 
 static inline int
@@ -4045,8 +4171,9 @@ destroy_device(int vid)
             ovs_mutex_lock(&dev->mutex);
             dev->vhost_reconfigured = false;
             ovsrcu_index_set(&dev->vid, -1);
-            memset(dev->vhost_rxq_enabled, 0,
-                   dev->up.n_rxq * sizeof *dev->vhost_rxq_enabled);
+            for (int i = 0; i < dev->up.n_rxq; i++) {
+                dev->vhost_rxq[i].enabled = false;
+            }
             netdev_dpdk_txq_map_clear(dev);
 
             netdev_change_seq_changed(&dev->up);
@@ -4091,10 +4218,21 @@ vring_state_changed(int vid, uint16_t queue_id, int enable)
         ovs_mutex_lock(&dev->mutex);
         if (nullable_string_is_equal(ifname, dev->vhost_id)) {
             if (is_rx) {
-                bool old_state = dev->vhost_rxq_enabled[qid];
+                bool old_state = dev->vhost_rxq[qid].enabled;
+                int old_fd = dev->vhost_rxq[qid].pending_fd;
 
-                dev->vhost_rxq_enabled[qid] = enable != 0;
-                if (old_state != dev->vhost_rxq_enabled[qid]) {
+                dev->vhost_rxq[qid].enabled = enable != 0;
+                if (dev->vhost_rxq[qid].enabled) {
+                    struct rte_vhost_vring vring;
+
+                    rte_vhost_get_vhost_vring(vid, queue_id, &vring);
+                    dev->vhost_rxq[qid].pending_fd = vring.kickfd;
+                } else {
+                    dev->vhost_rxq[qid].pending_fd = -1;
+                }
+                if (old_state != dev->vhost_rxq[qid].enabled
+                    || old_fd != dev->vhost_rxq[qid].pending_fd) {
+                    seq_change(dev->vhost_state_seq);
                     netdev_change_seq_changed(&dev->up);
                 }
             } else {
@@ -5030,7 +5168,7 @@ dpdk_vhost_reconfigure_helper(struct netdev_dpdk *dev)
 
     /* Always keep RX queue 0 enabled for implementations that won't
      * report vring states. */
-    dev->vhost_rxq_enabled[0] = true;
+    dev->vhost_rxq[0].enabled = true;
 
     /* Enable TX queue 0 by default if it wasn't disabled. */
     if (dev->tx_q[0].map == OVS_VHOST_QUEUE_MAP_UNKNOWN) {
@@ -5414,24 +5552,23 @@ netdev_dpdk_rte_flow_tunnel_item_release(struct netdev *netdev,
     .rxq_destruct = netdev_dpdk_rxq_destruct,               \
     .rxq_dealloc = netdev_dpdk_rxq_dealloc
 
-#define NETDEV_DPDK_CLASS_BASE                          \
-    NETDEV_DPDK_CLASS_COMMON,                           \
-    .init = netdev_dpdk_class_init,                     \
-    .destruct = netdev_dpdk_destruct,                   \
-    .set_tx_multiq = netdev_dpdk_set_tx_multiq,         \
-    .get_carrier = netdev_dpdk_get_carrier,             \
-    .get_stats = netdev_dpdk_get_stats,                 \
-    .get_custom_stats = netdev_dpdk_get_custom_stats,   \
-    .get_features = netdev_dpdk_get_features,           \
-    .get_status = netdev_dpdk_get_status,               \
-    .reconfigure = netdev_dpdk_reconfigure,             \
-    .rxq_recv = netdev_dpdk_rxq_recv
-
 static const struct netdev_class dpdk_class = {
     .type = "dpdk",
-    NETDEV_DPDK_CLASS_BASE,
+    .init = netdev_dpdk_class_init,
+    NETDEV_DPDK_CLASS_COMMON,
     .construct = netdev_dpdk_construct,
+    .destruct = netdev_dpdk_destruct,
     .set_config = netdev_dpdk_set_config,
+    .reconfigure = netdev_dpdk_reconfigure,
+    .set_tx_multiq = netdev_dpdk_set_tx_multiq,
+    .get_carrier = netdev_dpdk_get_carrier,
+    .get_stats = netdev_dpdk_get_stats,
+    .get_custom_stats = netdev_dpdk_get_custom_stats,
+    .get_features = netdev_dpdk_get_features,
+    .get_status = netdev_dpdk_get_status,
+    .rxq_recv = netdev_dpdk_rxq_recv,
+    .rxq_wait = netdev_dpdk_rxq_wait,
+    .rxq_can_wait = netdev_dpdk_rxq_can_wait,
     .send = netdev_dpdk_eth_send,
 };
 
@@ -5448,6 +5585,7 @@ static const struct netdev_class dpdk_vhost_class = {
     .reconfigure = netdev_dpdk_vhost_reconfigure,
     .rxq_recv = netdev_dpdk_vhost_rxq_recv,
     .rxq_enabled = netdev_dpdk_vhost_rxq_enabled,
+    .rxq_wait = netdev_dpdk_vhost_rxq_wait,
 };
 
 static const struct netdev_class dpdk_vhost_client_class = {
@@ -5464,6 +5602,7 @@ static const struct netdev_class dpdk_vhost_client_class = {
     .reconfigure = netdev_dpdk_vhost_client_reconfigure,
     .rxq_recv = netdev_dpdk_vhost_rxq_recv,
     .rxq_enabled = netdev_dpdk_vhost_rxq_enabled,
+    .rxq_wait = netdev_dpdk_vhost_rxq_wait,
 };
 
 void
