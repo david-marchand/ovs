@@ -472,6 +472,13 @@ an eth device whose mac address is ``00:11:22:33:44:55``::
     $ ovs-vsctl add-port br0 dpdk-mac -- set Interface dpdk-mac type=dpdk \
        options:dpdk-devargs="class=eth,mac=00:11:22:33:44:55"
 
+However, please note that this requires DPDK to probe all available resources
+which is not the default behavior. As a consequence, an additional setting must
+be passed in the ``dpdk-extra`` configuration to use this syntax::
+
+    $ ovs-vsctl --no-wait set Open_vSwitch . \
+        other_config:dpdk-extra="-b 0000:00:00.0"
+
 Representor specific configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -1961,6 +1961,9 @@ netdev_dpdk_get_port_by_mac(const char *mac_str)
         }
     }
 
+    VLOG_WARN("could not identify port with mac %s, please ensure "
+              "'-b 0000:00:00.0' is set in dpdk-extra configuration", mac_str);
+
     return DPDK_ETH_PORT_ID_INVALID;
 }
 
