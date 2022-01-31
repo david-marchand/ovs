@@ -453,6 +453,21 @@
         </p>
       </column>
 
+      <column name="other_config" key="dpdk-probe-at-init"
+              type='{"type": "boolean"}'>
+        <p>
+          Specifies whether DPDK should probe all devices available at the
+          time DPDK is initialised. This is required when declaring DPDK ports
+          using the "class=eth,mac=XX:XX:XX:XX:XX:XX" syntax but beware that
+          it implies more resources consumption and undesired side effects
+          with some devices (like mlx5).
+        </p>
+        <p>
+          If not specified, DPDK will probe no device at initialisation,
+          which should be fine in most cases.
+        </p>
+      </column>
+
       <column name="other_config" key="dpdk-extra"
               type='{"type": "string"}'>
         <p>

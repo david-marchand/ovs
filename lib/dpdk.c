@@ -430,6 +430,14 @@ dpdk_init__(const struct smap *ovs_other_config)
         svec_add_nocopy(&args, xasprintf("0@%d", cpu));
     }
 
+    if (!args_contains(&args, "-a") && !args_contains(&args, "-b")
+        && !smap_get_bool(ovs_other_config, "dpdk-probe-at-init", false)) {
+        /* Prevent DPDK from probing PCI devices, unless some -a/-b is set in
+         * config. */
+        svec_add(&args, "-a");
+        svec_add(&args, "pci:0000:00:00.0");
+    }
+
     svec_terminate(&args);
 
     optind = 1;
