@@ -25,6 +25,10 @@ Post-v3.4.0
        formats.
    - DPDK:
      * OVS validated with DPDK 23.11.2.
+     * Probing of devices at DPDK init has been disabled to avoid wasting
+       resources on unused devices. This breaks DPDK netdev ports using
+       "class=eth,mac=" syntax (though it can be restored, see
+       Documentation/howto/dpdk.rst).
 
 
 v3.4.0 - 15 Aug 2024

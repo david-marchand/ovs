@@ -62,6 +62,12 @@ is suggested::
 
 .. important::
 
+    Using this syntax requires that DPDK probes the PCI device owning those
+    multiple ports. This can be achieved by either setting an allowed list
+    of PCI devices in the ``dpdk-extra`` configuration, or by asking for
+    probing all PCI devices available at initialisation (setting
+    ``dpdk-probe-at-init`` to true).
+
     Hotplugging physical interfaces is not supported using the above syntax.
     This is expected to change with the release of DPDK v18.05. For information
     on hotplugging physical interfaces, you should instead refer to

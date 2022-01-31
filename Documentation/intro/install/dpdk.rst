@@ -293,6 +293,13 @@ listed below. Defaults will be provided for all values not explicitly set.
   sockets. If not specified, this option will not be set by default. DPDK
   default will be used instead.
 
+``dpdk-probe-at-init``
+  Let DPDK EAL probe all available PCI devices at initialisation.
+  This consumes more resources as OVS may not use all probed devices and this
+  may have undesired side effects (like losing receiving capabilities for mlx5
+  VF kernel netdevs). However, this option must be enabled when using the
+  ``class=eth,mac=XX:XX:XX:XX:XX:XX`` syntax for DPDK ports.
+
 ``dpdk-hugepage-dir``
   Directory where hugetlbfs is mounted
 

@@ -2058,7 +2058,7 @@ netdev_dpdk_get_port_by_mac(const char *mac_str, const char **extra_err)
         }
     }
 
-    *extra_err = "unknown mac";
+    *extra_err = "unknown mac (dpdk-probe-at-init=true may be needed)";
 
     return DPDK_ETH_PORT_ID_INVALID;
 }
