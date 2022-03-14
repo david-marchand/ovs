@@ -163,8 +163,8 @@ else
             run_as_root="${run_as_root} ip netns exec ovs-system-test-ns"
         fi
         if [ "${testsuite##*dpdk}" != "$testsuite" ]; then
-            sudo sh -c 'echo 1024 > /proc/sys/vm/nr_hugepages' || true
-            [ "$(cat /proc/sys/vm/nr_hugepages)" = '1024' ]
+            sudo sh -c 'echo 2048 > /proc/sys/vm/nr_hugepages' || true
+            [ "$(cat /proc/sys/vm/nr_hugepages)" = '2048' ]
             export DPDK_EAL_OPTIONS="--lcores 0@1,1@1,2@1"
         fi
         $run_as_root make $testsuite TESTSUITEFLAGS="${JOBS} ${TEST_RANGE}" \

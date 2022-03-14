@@ -49,6 +49,11 @@ function build_dpdk()
     # Install DPDK using prefix.
     DPDK_OPTS="$DPDK_OPTS --prefix=$DPDK_INSTALL_DIR"
 
+    # Disable net/af_xdp zero copy support so that this driver places data at
+    # RTE_PKTMBUF_HEADROOM.
+    grep -rl '#include <linux/if_xdp.h>' drivers/net/af_xdp |
+    xargs sed -i -e 's/^\(#include <linux\/if_xdp.h>\)$/\1\n#undef XDP_UMEM_UNALIGNED_CHUNK_FLAG/'
+
     meson $DPDK_OPTS build
     ninja -C build
     ninja -C build install
