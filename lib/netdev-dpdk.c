@@ -3094,41 +3094,67 @@ netdev_dpdk_filter_packet_len(struct netdev_dpdk *dev, struct rte_mbuf **pkts,
     return cnt;
 }
 
+void *
+netdev_dpdk_extbuf_allocate(uint32_t *data_len)
+{
+    *data_len += sizeof(struct rte_mbuf_ext_shared_info) + sizeof(uintptr_t);
+    *data_len = RTE_ALIGN_CEIL(*data_len, sizeof(uintptr_t));
+    return rte_malloc(NULL, *data_len, RTE_CACHE_LINE_SIZE);
+}
+
 static void
 netdev_dpdk_extbuf_free(void *addr OVS_UNUSED, void *opaque)
 {
     rte_free(opaque);
 }
 
+void
+netdev_dpdk_extbuf_replace(struct dp_packet *b, void *buf, uint32_t data_len)
+{
+    struct rte_mbuf *pkt = (struct rte_mbuf *) b;
+    struct rte_mbuf_ext_shared_info *shinfo;
+    uint16_t buf_len = data_len;
+
+    shinfo = rte_pktmbuf_ext_shinfo_init_helper(buf, &buf_len,
+                                                netdev_dpdk_extbuf_free,
+                                                buf);
+    ovs_assert(shinfo != NULL);
+
+    if (RTE_MBUF_HAS_EXTBUF(pkt)) {
+        rte_pktmbuf_detach_extbuf(pkt);
+    }
+    rte_pktmbuf_attach_extbuf(pkt, buf, rte_malloc_virt2iova(buf), buf_len,
+                              shinfo);
+    /* OVS only supports mono segment.
+     * Packet size did not change, restore the current segment length. */
+    pkt->data_len = pkt->pkt_len;
+}
+
 static struct rte_mbuf *
 dpdk_pktmbuf_attach_extbuf(struct rte_mbuf *pkt, uint32_t data_len)
 {
     uint32_t total_len = RTE_PKTMBUF_HEADROOM + data_len;
-    struct rte_mbuf_ext_shared_info *shinfo = NULL;
+    struct rte_mbuf_ext_shared_info *shinfo;
     uint16_t buf_len;
     void *buf;
 
-    total_len += sizeof *shinfo + sizeof(uintptr_t);
-    total_len = RTE_ALIGN_CEIL(total_len, sizeof(uintptr_t));
-
+    buf = netdev_dpdk_extbuf_allocate(&total_len);
+    if (OVS_UNLIKELY(buf == NULL)) {
+        VLOG_ERR("Failed to allocate memory using rte_malloc: %u", total_len);
+        return NULL;
+    }
     if (OVS_UNLIKELY(total_len > UINT16_MAX)) {
+        netdev_dpdk_extbuf_free(NULL, buf);
         VLOG_ERR("Can't copy packet: too big %u", total_len);
         return NULL;
     }
 
     buf_len = total_len;
-    buf = rte_malloc(NULL, buf_len, RTE_CACHE_LINE_SIZE);
-    if (OVS_UNLIKELY(buf == NULL)) {
-        VLOG_ERR("Failed to allocate memory using rte_malloc: %u", buf_len);
-        return NULL;
-    }
-
-    /* Initialize shinfo. */
     shinfo = rte_pktmbuf_ext_shinfo_init_helper(buf, &buf_len,
                                                 netdev_dpdk_extbuf_free,
                                                 buf);
     if (OVS_UNLIKELY(shinfo == NULL)) {
-        rte_free(buf);
+        netdev_dpdk_extbuf_free(NULL, buf);
         VLOG_ERR("Failed to initialize shared info for mbuf while "
                  "attempting to attach an external buffer.");
         return NULL;
