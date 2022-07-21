@@ -85,24 +85,6 @@ static bool vhost_postcopy_enabled = false; /* Status of vHost POSTCOPY
                                              * support. */
 static bool per_port_memory = false; /* Status of per port memory support */
 
-static const char *
-dpdk_get_vhost_sock_dir(void)
-{
-    return vhost_sock_dir;
-}
-
-static bool
-dpdk_vhost_iommu_enabled(void)
-{
-    return vhost_iommu_enabled;
-}
-
-static bool
-dpdk_vhost_postcopy_enabled(void)
-{
-    return vhost_postcopy_enabled;
-}
-
 #define DPDK_PORT_WATCHDOG_INTERVAL 5
 
 #define OVS_CACHE_LINE_SIZE CACHE_LINE_SIZE
@@ -1403,7 +1385,7 @@ netdev_dpdk_vhost_construct(struct netdev *netdev)
     /* Take the name of the vhost-user port and append it to the location where
      * the socket is to be created, then register the socket.
      */
-    dev->vhost_id = xasprintf("%s/%s", dpdk_get_vhost_sock_dir(), name);
+    dev->vhost_id = xasprintf("%s/%s", vhost_sock_dir, name);
 
     dev->vhost_driver_flags &= ~RTE_VHOST_USER_CLIENT;
 
@@ -5126,12 +5108,12 @@ netdev_dpdk_vhost_client_reconfigure(struct netdev *netdev)
         vhost_flags |= RTE_VHOST_USER_LINEARBUF_SUPPORT;
 
         /* Enable IOMMU support, if explicitly requested. */
-        if (dpdk_vhost_iommu_enabled()) {
+        if (vhost_iommu_enabled) {
             vhost_flags |= RTE_VHOST_USER_IOMMU_SUPPORT;
         }
 
         /* Enable POSTCOPY support, if explicitly requested. */
-        if (dpdk_vhost_postcopy_enabled()) {
+        if (vhost_postcopy_enabled) {
             vhost_flags |= RTE_VHOST_USER_POSTCOPY_SUPPORT;
         }
 
