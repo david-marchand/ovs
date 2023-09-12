@@ -587,6 +587,8 @@ struct netdev_dpdk {
 struct netdev_rxq_dpdk {
     struct netdev_rxq up;
     dpdk_port_t port_id;
+    rte_be16_t packet_id;
+    rte_be16_t fragment_offset;
 };
 
 static void netdev_dpdk_destruct(struct netdev *netdev);
@@ -2682,6 +2684,34 @@ netdev_dpdk_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
                              NETDEV_MAX_BURST);
     if (!nb_rx) {
         return EAGAIN;
+    }
+
+    for (int i = 0; i < nb_rx; i++) {
+        struct rte_ether_hdr *eth_hdr = rte_pktmbuf_mtod(((struct rte_mbuf **)batch->packets)[i], struct rte_ether_hdr *);
+        struct rte_ipv4_hdr *ipv4_hdr = rte_pktmbuf_mtod_offset(((struct rte_mbuf **)batch->packets)[i], struct rte_ipv4_hdr *, sizeof(*eth_hdr));
+        uint16_t fragment_offset;
+
+        if (eth_hdr->ether_type != rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4))
+            continue;
+        fragment_offset = rte_be_to_cpu_16(ipv4_hdr->fragment_offset);
+        if (fragment_offset & RTE_IPV4_HDR_DF_FLAG)
+            continue;
+        if (ipv4_hdr->packet_id == rx->packet_id) {
+            if ((fragment_offset & RTE_IPV4_HDR_OFFSET_MASK) != rx->fragment_offset) {
+                VLOG_WARN("Incorrect fragment");
+                rx->fragment_offset = 0;
+            } else if (!(fragment_offset & RTE_IPV4_HDR_MF_FLAG)) {
+                rx->fragment_offset = 0;
+            } else {
+                rx->fragment_offset += (rte_be_to_cpu_16(ipv4_hdr->total_length) - sizeof(*ipv4_hdr)) / RTE_IPV4_HDR_OFFSET_UNITS;
+            }
+        } else if (rx->fragment_offset != 0) {
+            VLOG_WARN("Incorrect fragment");
+            rx->fragment_offset = 0;
+        } else {
+            rx->fragment_offset = (rte_be_to_cpu_16(ipv4_hdr->total_length) - sizeof(*ipv4_hdr)) / RTE_IPV4_HDR_OFFSET_UNITS;
+        }
+        rx->packet_id = ipv4_hdr->packet_id;
     }
 
     if (policer) {
