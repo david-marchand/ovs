@@ -2696,9 +2696,9 @@ netdev_dpdk_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
         fragment_offset = rte_be_to_cpu_16(ipv4_hdr->fragment_offset);
         if (fragment_offset & RTE_IPV4_HDR_DF_FLAG)
             continue;
-        if (ipv4_hdr->packet_id == rx->packet_id) {
+        if (rte_be_to_cpu_16(ipv4_hdr->packet_id) == rx->packet_id) {
             if ((fragment_offset & RTE_IPV4_HDR_OFFSET_MASK) != rx->fragment_offset) {
-                VLOG_WARN("Incorrect fragment");
+                VLOG_WARN("Incorrect fragment for packet_id %"PRIu16", expecting offset %"PRIu16", received %"PRIu16, rx->packet_id, rx->fragment_offset * RTE_IPV4_HDR_OFFSET_UNITS, RTE_IPV4_HDR_OFFSET_UNITS * RTE_IPV4_HDR_OFFSET_UNITS);
                 rx->fragment_offset = 0;
             } else if (!(fragment_offset & RTE_IPV4_HDR_MF_FLAG)) {
                 rx->fragment_offset = 0;
@@ -2706,12 +2706,12 @@ netdev_dpdk_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
                 rx->fragment_offset += (rte_be_to_cpu_16(ipv4_hdr->total_length) - sizeof(*ipv4_hdr)) / RTE_IPV4_HDR_OFFSET_UNITS;
             }
         } else if (rx->fragment_offset != 0) {
-            VLOG_WARN("Incorrect fragment");
+            VLOG_WARN("Missing some fragments for packet_id %"PRIu16, rx->packet_id);
             rx->fragment_offset = 0;
         } else {
             rx->fragment_offset = (rte_be_to_cpu_16(ipv4_hdr->total_length) - sizeof(*ipv4_hdr)) / RTE_IPV4_HDR_OFFSET_UNITS;
         }
-        rx->packet_id = ipv4_hdr->packet_id;
+        rx->packet_id = rte_be_to_cpu_16(ipv4_hdr->packet_id);
     }
 
     if (policer) {
