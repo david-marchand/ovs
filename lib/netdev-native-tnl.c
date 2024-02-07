@@ -280,25 +280,25 @@ dp_packet_tnl_ol_process(struct dp_packet *packet,
                 dp_packet_hwol_set_tx_ipv6(packet);
             }
         }
+    }
 
-        /* Attention please, tunnel inner l2 len is consist of udp header
-         * len and tunnel header len and inner l2 len. */
-        if (data->tnl_type == OVS_VPORT_TYPE_GENEVE) {
-            eth = (struct eth_header *)(data->header);
-            ip = (struct ip_header *)(eth + 1);
-            udp = (struct udp_header *)(ip + 1);
-            gnh = (struct genevehdr *)(udp + 1);
-            opt_len = gnh->opt_len * 4;
-            dp_packet_hwol_set_tunnel_geneve(packet);
-            dp_packet_set_l2_len(packet, (char *) dp_packet_l3(packet) -
-                                         (char *) dp_packet_eth(packet) +
-                                         GENEVE_BASE_HLEN + opt_len);
-        } else if (data->tnl_type == OVS_VPORT_TYPE_VXLAN) {
-            dp_packet_hwol_set_tunnel_vxlan(packet);
-            dp_packet_set_l2_len(packet, (char *) dp_packet_l3(packet) -
-                                         (char *) dp_packet_eth(packet) +
-                                         VXLAN_HLEN);
-        }
+    /* Attention please, tunnel inner l2 len is consist of udp header
+     * len and tunnel header len and inner l2 len. */
+    if (data->tnl_type == OVS_VPORT_TYPE_GENEVE) {
+        eth = (struct eth_header *)(data->header);
+        ip = (struct ip_header *)(eth + 1);
+        udp = (struct udp_header *)(ip + 1);
+        gnh = (struct genevehdr *)(udp + 1);
+        opt_len = gnh->opt_len * 4;
+        dp_packet_hwol_set_tunnel_geneve(packet);
+        dp_packet_set_l2_len(packet, (char *) dp_packet_l3(packet) -
+                                     (char *) dp_packet_eth(packet) +
+                                     GENEVE_BASE_HLEN + opt_len);
+    } else if (data->tnl_type == OVS_VPORT_TYPE_VXLAN) {
+        dp_packet_hwol_set_tunnel_vxlan(packet);
+        dp_packet_set_l2_len(packet, (char *) dp_packet_l3(packet) -
+                                     (char *) dp_packet_eth(packet) +
+                                     VXLAN_HLEN);
     }
 }
 
