@@ -623,7 +623,7 @@ static void do_xlate_actions(const struct ofpact *, size_t ofpacts_len,
                              struct xlate_ctx *, bool, bool);
 static void clone_xlate_actions(const struct ofpact *, size_t ofpacts_len,
                                 struct xlate_ctx *, bool, bool);
-static void xlate_normal(struct xlate_ctx *);
+static void xlate_normal(struct xlate_ctx *ctx, bool is_last_action);
 static void xlate_normal_flood(struct xlate_ctx *ct,
                                struct xbundle *in_xbundle, struct xvlan *);
 static void xlate_table_action(struct xlate_ctx *, ofp_port_t in_port,
@@ -645,6 +645,8 @@ static void xvlan_input_translate(const struct xbundle *,
 static void xvlan_output_translate(const struct xbundle *,
                                    const struct xvlan *xvlan,
                                    struct xvlan *out);
+static void output_normal__(struct xlate_ctx *, const struct xbundle *,
+                            const struct xvlan *, bool);
 static void output_normal(struct xlate_ctx *, const struct xbundle *,
                           const struct xvlan *);
 
@@ -2578,8 +2580,8 @@ check_and_set_cvlan_mask(struct flow_wildcards *wc,
 }
 
 static void
-output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
-              const struct xvlan *xvlan)
+output_normal__(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
+              const struct xvlan *xvlan, bool is_last_action)
 {
     uint16_t vid;
     union flow_vlan_hdr old_vlans[FLOW_MAX_VLAN_HEADERS];
@@ -2664,8 +2666,15 @@ output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
     xvlan_put(&ctx->xin->flow, &out_xvlan, out_xbundle->use_priority_tags);
 
     compose_output_action(ctx, xport->ofp_port, use_recirc ? &xr : NULL,
-                          false, false);
+                          is_last_action, false);
     memcpy(&ctx->xin->flow.vlans, &old_vlans, sizeof(old_vlans));
+}
+
+static void
+output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
+              const struct xvlan *xvlan)
+{
+    output_normal__(ctx, out_xbundle, xvlan, false);
 }
 
 /* A VM broadcasts a gratuitous ARP to indicate that it has resumed after
@@ -3130,7 +3139,7 @@ is_ip_local_multicast(const struct flow *flow, struct flow_wildcards *wc)
 }
 
 static void
-xlate_normal(struct xlate_ctx *ctx)
+xlate_normal(struct xlate_ctx *ctx, bool is_last_action)
 {
     struct flow_wildcards *wc = ctx->wc;
     struct flow *flow = &ctx->xin->flow;
@@ -3341,7 +3350,7 @@ xlate_normal(struct xlate_ctx *ctx)
                 && mac_xbundle != in_xbundle
                 && mac_xbundle->ofbundle != in_xbundle->ofbundle) {
                 xlate_report(ctx, OFT_DETAIL, "forwarding to learned port");
-                output_normal(ctx, mac_xbundle, &xvlan);
+                output_normal__(ctx, mac_xbundle, &xvlan, is_last_action);
             } else if (!mac_xbundle) {
                 xlate_report(ctx, OFT_WARN,
                              "learned port is unknown, dropping");
@@ -5489,7 +5498,7 @@ xlate_output_action(struct xlate_ctx *ctx, ofp_port_t port,
                            do_xlate_actions);
         break;
     case OFPP_NORMAL:
-        xlate_normal(ctx);
+        xlate_normal(ctx, is_last_action);
         break;
     case OFPP_FLOOD:
         flood_packets(ctx, false, is_last_action);
