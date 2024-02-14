@@ -407,6 +407,105 @@ NS_CHECK_EXEC([at_ns0], [ping -s 3200 -q -c 3 -i 0.3 -W 2 10.1.1.100 | FORMAT_PI
 OVS_TRAFFIC_VSWITCHD_STOP
 AT_CLEANUP
 
+AT_SETUP([datapath - ping over many vxlan tunnels])
+OVS_CHECK_TUNNEL_TSO()
+OVS_CHECK_VXLAN()
+
+OVS_TRAFFIC_VSWITCHD_START()
+ADD_BR([br-underlay0])
+ADD_BR([br-underlay1])
+ADD_BR([br-underlay2])
+
+##############################################################
+#
+# at_ns0                    . init_net
+#                           .
+# at_vxlan1 (10.1.1.1/24)   . br0 (10.1.1.100/24)
+# (remote 172.31.1.100)     . |
+#                           . at_vxlan0
+#                           . (remote 172.31.1.1)
+#                           .
+# at_vxlan3 (172.31.1.1/24) . br-underlay0 (172.31.1.100/24)
+# (remote 172.31.2.100)     . |
+#                           . at_vxlan2
+#                           . (remote 172.31.2.1)
+#                           .
+# at_vxlan5 (172.31.2.1/24) . br-underlay1 (172.31.2.100/24)
+# (remote 172.31.3.100)     . |
+#                           . at_vxlan4
+#                           . (remote 172.31.3.1)
+#                           .
+# p0 (172.31.3.1/24)        . br-underlay2 (172.31.3.100/24)
+# |                         . |
+# \-------------------------.-ovs-p0
+#
+##############################################################
+#
+# Fully encapsulated traffic icmp request over p0 -> ovs-p0 should be like:
+#
+# <Ether type=IPv4 |
+# <IP version=4 proto=udp src=172.31.3.1 dst=172.31.3.100 |
+# <UDP dport=vxlan |
+# <VXLAN flags=Instance vni=0x0 |
+# <Ether type=IPv4 |
+# <IP version=4 proto=udp src=172.31.2.1 dst=172.31.2.100 |
+# <UDP dport=vxlan |
+# <VXLAN flags=Instance vni=0x1 |
+# <Ether type=IPv4 |
+# <IP version=4 proto=udp src=172.31.1.1 dst=172.31.1.100 |
+# <UDP dport=vxlan |
+# <VXLAN flags=Instance vni=0x2 |
+# <Ether type=IPv4 |
+# <IP  version=4 proto=icmp src=10.1.1.1 dst=10.1.1.100 |
+# <ICMP type=echo-request code=0 |
+# ...
+#
+AT_CHECK([ovs-ofctl add-flow br0 "actions=normal"])
+AT_CHECK([ovs-ofctl add-flow br-underlay0 "actions=normal"])
+AT_CHECK([ovs-ofctl add-flow br-underlay1 "actions=normal"])
+AT_CHECK([ovs-ofctl add-flow br-underlay2 "actions=normal"])
+
+ADD_NAMESPACES(at_ns0)
+
+AT_CHECK([ip link set dev br-underlay2 up])
+AT_CHECK([ip link set dev br-underlay1 up])
+AT_CHECK([ip link set dev br-underlay0 up])
+
+ADD_VETH(p0, at_ns0, br-underlay2, "172.31.3.1/24")
+AT_CHECK([ip addr add dev br-underlay2 "172.31.3.100/24"])
+
+ADD_OVS_TUNNEL([vxlan], [br-underlay1], [at_vxlan4], [172.31.3.1], [172.31.2.100/24], [options:key=0])
+ADD_NATIVE_TUNNEL([vxlan], [at_vxlan5], [at_ns0], [172.31.3.100], [172.31.2.1/24],
+                  [id 0 dstport 4789])
+
+ADD_OVS_TUNNEL([vxlan], [br-underlay0], [at_vxlan2], [172.31.2.1], [172.31.1.100/24], [options:key=1])
+ADD_NATIVE_TUNNEL([vxlan], [at_vxlan3], [at_ns0], [172.31.2.100], [172.31.1.1/24],
+                  [id 1 dstport 4789])
+
+ADD_OVS_TUNNEL([vxlan], [br0], [at_vxlan0], [172.31.1.1], [10.1.1.100/24], [options:key=2])
+ADD_NATIVE_TUNNEL([vxlan], [at_vxlan1], [at_ns0], [172.31.1.100], [10.1.1.1/24],
+                  [id 2 dstport 4789])
+
+NS_CHECK_EXEC([at_ns0], [ping -q -c 3 -i 0.3 -w 2 172.31.3.100 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+NS_CHECK_EXEC([at_ns0], [ping -q -c 3 -i 0.3 -w 2 172.31.2.100 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+NS_CHECK_EXEC([at_ns0], [ping -q -c 3 -i 0.3 -w 2 172.31.1.100 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+NS_CHECK_EXEC([at_ns0], [ping -q -c 3 -i 0.3 -w 2 10.1.1.100 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+NS_CHECK_EXEC([at_ns0], [ping -s 1000 -q -c 3 -i 0.3 -w 2 10.1.1.100 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+OVS_TRAFFIC_VSWITCHD_STOP
+AT_CLEANUP
+
 AT_SETUP([datapath - ping over vxlan6 tunnel])
 AT_SKIP_IF([test $HAVE_NC = no])
 OVS_CHECK_VXLAN_UDP6ZEROCSUM()
