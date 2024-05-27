@@ -190,9 +190,13 @@ pmd_perf_stats_init(struct pmd_perf_stats *s)
     histogram_walls_set_lin(&s->pkts_per_batch, 0, 32);
     /* Linear histogram for upcalls/it ranging from 0 to 30. */
     histogram_walls_set_lin(&s->upcalls, 0, 30);
+    /* Logarithmic histogram for cycles/rx. */
+    histogram_walls_set_log(&s->rx_cycles, 1000, 1000000);
     /* Logarithmic histogram for cycles/upcall ranging from 1000 to 1M
      * (corresponding to 400 ns to 400 us at 2.5 GHz TSC clock). */
     histogram_walls_set_log(&s->cycles_per_upcall, 1000, 1000000);
+    /* Logarithmic histogram for cycles/tx. */
+    histogram_walls_set_log(&s->tx_cycles, 1000, 1000000);
     /* Log. histogram for max vhostuser queue fill level from 0 to 512.
      * 512 is the maximum fill level for a virtio queue with 1024
      * descriptors (maximum configurable length in Qemu), with the
@@ -308,25 +312,30 @@ pmd_perf_format_histograms(struct ds *str, struct pmd_perf_stats *s)
 
     ds_put_cstr(str, "Histograms\n");
     ds_put_format(str,
-                  "   %-21s  %-21s  %-21s  %-21s  %-21s  %-21s  %-21s\n",
+                  "   %-21s  %-21s  %-21s  %-21s  %-21s  %-21s  %-21s  %-21s"
+                  "  %-21s\n",
                   "cycles/it", "packets/it", "cycles/pkt", "pkts/batch",
-                  "max vhost qlen", "upcalls/it", "cycles/upcall");
+                  "max vhost qlen", "upcalls/it", "cycles/rx", "cycles/upcall",
+                  "cycles/tx");
     for (i = 0; i < NUM_BINS-1; i++) {
         ds_put_format(str,
             "   %-9d %-11"PRIu64"  %-9d %-11"PRIu64"  %-9d %-11"PRIu64
             "  %-9d %-11"PRIu64"  %-9d %-11"PRIu64"  %-9d %-11"PRIu64
-            "  %-9d %-11"PRIu64"\n",
+            "  %-9d %-11"PRIu64"  %-9d %-11"PRIu64"  %-9d %-11"PRIu64"\n",
             s->cycles.wall[i], s->cycles.bin[i],
             s->pkts.wall[i],s->pkts.bin[i],
             s->cycles_per_pkt.wall[i], s->cycles_per_pkt.bin[i],
             s->pkts_per_batch.wall[i], s->pkts_per_batch.bin[i],
             s->max_vhost_qfill.wall[i], s->max_vhost_qfill.bin[i],
             s->upcalls.wall[i], s->upcalls.bin[i],
-            s->cycles_per_upcall.wall[i], s->cycles_per_upcall.bin[i]);
+            s->rx_cycles.wall[i], s->rx_cycles.bin[i],
+            s->cycles_per_upcall.wall[i], s->cycles_per_upcall.bin[i],
+            s->tx_cycles.wall[i], s->tx_cycles.bin[i]);
     }
     ds_put_format(str,
                   "   %-9s %-11"PRIu64"  %-9s %-11"PRIu64"  %-9s %-11"PRIu64
                   "  %-9s %-11"PRIu64"  %-9s %-11"PRIu64"  %-9s %-11"PRIu64
+                  "  %-9s %-11"PRIu64"  %-9s %-11"PRIu64
                   "  %-9s %-11"PRIu64"\n",
                   ">", s->cycles.bin[i],
                   ">", s->pkts.bin[i],
@@ -334,7 +343,9 @@ pmd_perf_format_histograms(struct ds *str, struct pmd_perf_stats *s)
                   ">", s->pkts_per_batch.bin[i],
                   ">", s->max_vhost_qfill.bin[i],
                   ">", s->upcalls.bin[i],
-                  ">", s->cycles_per_upcall.bin[i]);
+                  ">", s->rx_cycles.bin[i],
+                  ">", s->cycles_per_upcall.bin[i],
+                  ">", s->tx_cycles.bin[i]);
     if (s->totals.iterations > 0) {
         ds_put_cstr(str,
                     "-----------------------------------------------------"
@@ -372,16 +383,18 @@ pmd_perf_format_iteration_history(struct ds *str, struct pmd_perf_stats *s,
         return;
     }
     ds_put_format(str, "   %-17s   %-10s   %-10s   %-10s   %-10s   "
-                  "%-10s   %-10s   %-10s\n",
+                  "%-10s   %-10s   %-10s   %-10s   %-10s\n",
                   "iter", "cycles", "packets", "cycles/pkt", "pkts/batch",
-                  "vhost qlen", "upcalls", "cycles/upcall");
+                  "vhost qlen", "upcalls", "cycles/rx", "cycles/upcall",
+                  "cycles/tx");
     for (i = 1; i <= n_iter; i++) {
         index = history_sub(s->iterations.idx, i);
         is = &s->iterations.sample[index];
         ds_put_format(str,
                       "   %-17"PRIu64"   %-11"PRIu64"  %-11"PRIu32
                       "  %-11"PRIu64"  %-11"PRIu32"  %-11"PRIu32
-                      "  %-11"PRIu32"  %-11"PRIu32"\n",
+                      "  %-11"PRIu32"  %-11"PRIu64"  %-11"PRIu32
+                      "  %-11"PRIu64"\n",
                       is->timestamp,
                       is->cycles,
                       is->pkts,
@@ -389,7 +402,9 @@ pmd_perf_format_iteration_history(struct ds *str, struct pmd_perf_stats *s,
                       is->batches ? is->pkts / is->batches : 0,
                       is->max_vhost_qfill,
                       is->upcalls,
-                      is->upcalls ? is->upcall_cycles / is->upcalls : 0);
+                      is->rx ? is->rx_cycles / is->rx : 0,
+                      is->upcalls ? is->upcall_cycles / is->upcalls : 0,
+                      is->tx ? is->tx_cycles / is->tx : 0);
     }
 }
 
@@ -405,16 +420,18 @@ pmd_perf_format_ms_history(struct ds *str, struct pmd_perf_stats *s, int n_ms)
     }
     ds_put_format(str,
                   "   %-12s   %-10s   %-10s   %-10s   %-10s"
-                  "   %-10s   %-10s   %-10s   %-10s\n",
+                  "   %-10s   %-10s   %-10s   %-10s   %-10s   %-10s\n",
                   "ms", "iterations", "cycles/it", "Kpps", "cycles/pkt",
-                  "pkts/batch", "vhost qlen", "upcalls", "cycles/upcall");
+                  "pkts/batch", "vhost qlen", "upcalls", "cycles/rx",
+                  "cycles/upcall", "cycles/tx");
     for (i = 1; i <= n_ms; i++) {
         index = history_sub(s->milliseconds.idx, i);
         is = &s->milliseconds.sample[index];
         ds_put_format(str,
                       "   %-12"PRIu64"   %-11"PRIu32"  %-11"PRIu64
                       "  %-11"PRIu32"  %-11"PRIu64"  %-11"PRIu32
-                      "  %-11"PRIu32"  %-11"PRIu32"  %-11"PRIu32"\n",
+                      "  %-11"PRIu32"  %-11"PRIu32"  %-11"PRIu64
+                      "  %-11"PRIu32"  %-11"PRIu64"\n",
                       is->timestamp,
                       is->iterations,
                       is->iterations ? is->cycles / is->iterations : 0,
@@ -424,7 +441,9 @@ pmd_perf_format_ms_history(struct ds *str, struct pmd_perf_stats *s, int n_ms)
                       is->iterations
                           ? is->max_vhost_qfill / is->iterations : 0,
                       is->upcalls,
-                      is->upcalls ? is->upcall_cycles / is->upcalls : 0);
+                      is->rx ? is->rx_cycles / is->rx : 0,
+                      is->upcalls ? is->upcall_cycles / is->upcalls : 0,
+                      is->tx ? is->tx_cycles / is->tx : 0);
     }
 }
 
@@ -467,8 +486,10 @@ pmd_perf_stats_clear_lock(struct pmd_perf_stats *s)
     histogram_clear(&s->cycles);
     histogram_clear(&s->pkts);
     histogram_clear(&s->cycles_per_pkt);
+    histogram_clear(&s->rx_cycles);
     histogram_clear(&s->upcalls);
     histogram_clear(&s->cycles_per_upcall);
+    histogram_clear(&s->tx_cycles);
     histogram_clear(&s->pkts_per_batch);
     histogram_clear(&s->max_vhost_qfill);
     history_init(&s->iterations);
@@ -577,6 +598,10 @@ pmd_perf_end_iteration(struct pmd_perf_stats *s, int rx_packets,
     cum_ms->upcalls += s->current.upcalls;
     cum_ms->upcall_cycles += s->current.upcall_cycles;
     cum_ms->batches += s->current.batches;
+    cum_ms->rx += s->current.rx;
+    cum_ms->rx_cycles += s->current.rx_cycles;
+    cum_ms->tx += s->current.tx;
+    cum_ms->tx_cycles += s->current.tx_cycles;
     cum_ms->max_vhost_qfill += s->current.max_vhost_qfill;
 
     if (log_enabled) {
@@ -615,6 +640,10 @@ pmd_perf_end_iteration(struct pmd_perf_stats *s, int rx_packets,
             s->totals.upcalls += cum_ms->upcalls;
             s->totals.upcall_cycles += cum_ms->upcall_cycles;
             s->totals.batches += cum_ms->batches;
+            s->totals.rx += cum_ms->rx;
+            s->totals.rx_cycles += cum_ms->rx_cycles;
+            s->totals.tx += cum_ms->tx;
+            s->totals.tx_cycles += cum_ms->tx_cycles;
             s->totals.max_vhost_qfill += cum_ms->max_vhost_qfill;
             cum_ms = history_next(&s->milliseconds);
             cum_ms->timestamp = now;

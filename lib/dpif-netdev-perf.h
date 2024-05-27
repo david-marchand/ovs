@@ -118,12 +118,16 @@ struct histogram {
 struct iter_stats {
     uint64_t timestamp;         /* Iteration no. or millisecond. */
     uint64_t cycles;            /* Number of TSC cycles spent in it. or ms. */
+    uint64_t rx_cycles;         /* Cycles spent in calling driver rx. */
+    uint64_t tx_cycles;         /* Cycles spent in calling driver tx. */
     uint64_t busy_cycles;       /* Cycles spent in busy iterations or ms. */
     uint32_t iterations;        /* Iterations in ms. */
     uint32_t pkts;              /* Packets processed in iteration or ms. */
     uint32_t upcalls;           /* Number of upcalls in iteration or ms. */
     uint32_t upcall_cycles;     /* Cycles spent in upcalls in it. or ms. */
     uint32_t batches;           /* Number of rx batches in iteration or ms. */
+    uint32_t rx;                /* Number of driver rx in iteration or ms. */
+    uint32_t tx;                /* Number of driver tx in iteration or ms. */
     uint32_t max_vhost_qfill;   /* Maximum fill level in iteration or ms. */
 };
 
@@ -174,8 +178,10 @@ struct pmd_perf_stats {
     struct histogram cycles;
     struct histogram pkts;
     struct histogram cycles_per_pkt;
+    struct histogram rx_cycles;
     struct histogram upcalls;
     struct histogram cycles_per_upcall;
+    struct histogram tx_cycles;
     struct histogram pkts_per_batch;
     struct histogram max_vhost_qfill;
     /* Iteration history buffer. */

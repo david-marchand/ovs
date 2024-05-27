@@ -5318,7 +5318,14 @@ dp_netdev_pmd_flush_output_on_port(struct dp_netdev_pmd_thread *pmd,
             if (dp_packet_batch_is_empty(&p->txq_pkts[i])) {
                 continue;
             }
+            cycles = cycles_counter_update(&pmd->perf_stats);
             netdev_send(p->port->netdev, i, &p->txq_pkts[i], true);
+            cycles = cycles_counter_update(&pmd->perf_stats) - cycles;
+            if (pmd_perf_metrics_enabled(pmd)) {
+                pmd->perf_stats.current.tx++;
+                pmd->perf_stats.current.tx_cycles += cycles;
+                histogram_add_sample(&pmd->perf_stats.tx_cycles, cycles);
+            }
             dp_packet_batch_init(&p->txq_pkts[i]);
         }
     } else {
@@ -5329,7 +5336,14 @@ dp_netdev_pmd_flush_output_on_port(struct dp_netdev_pmd_thread *pmd,
             tx_qid = pmd->static_tx_qid;
             concurrent_txqs = false;
         }
+        cycles = cycles_counter_update(&pmd->perf_stats);
         netdev_send(p->port->netdev, tx_qid, &p->output_pkts, concurrent_txqs);
+        cycles = cycles_counter_update(&pmd->perf_stats) - cycles;
+        if (pmd_perf_metrics_enabled(pmd)) {
+            pmd->perf_stats.current.tx++;
+            pmd->perf_stats.current.tx_cycles += cycles;
+            histogram_add_sample(&pmd->perf_stats.tx_cycles, cycles);
+        }
     }
     dp_packet_batch_init(&p->output_pkts);
 
@@ -5400,7 +5414,14 @@ dp_netdev_process_rxq_port(struct dp_netdev_pmd_thread *pmd,
         qlen_p = &rem_qlen;
     }
 
+    cycles = cycles_counter_update(&pmd->perf_stats);
     error = netdev_rxq_recv(rxq->rx, &batch, qlen_p);
+    cycles = cycles_counter_update(&pmd->perf_stats) - cycles;
+    if (pmd_perf_metrics_enabled(pmd)) {
+        s->current.rx++;
+        s->current.rx_cycles += cycles;
+        histogram_add_sample(&s->rx_cycles, cycles);
+    }
     if (!error) {
         /* At least one packet received. */
         *recirc_depth_get() = 0;
