@@ -334,6 +334,10 @@ struct dp_netdev {
     /* Bonds. */
     struct ovs_mutex bond_mutex; /* Protects updates of 'tx_bonds'. */
     struct cmap tx_bonds; /* Contains 'struct tx_bond'. */
+
+    atomic_uint32_t rx_cycles_warn_threshold;
+    atomic_uint32_t upcall_cycles_warn_threshold;
+    atomic_uint32_t tx_cycles_warn_threshold;
 };
 
 static struct dp_netdev_port *dp_netdev_lookup_port(const struct dp_netdev *dp,
@@ -1866,6 +1870,9 @@ create_dp_netdev(const char *name, const struct dpif_class *class,
 
     atomic_init(&dp->emc_insert_min, DEFAULT_EM_FLOW_INSERT_MIN);
     atomic_init(&dp->tx_flush_interval, DEFAULT_TX_FLUSH_INTERVAL);
+    atomic_init(&dp->rx_cycles_warn_threshold, UINT32_MAX);
+    atomic_init(&dp->upcall_cycles_warn_threshold, UINT32_MAX);
+    atomic_init(&dp->tx_cycles_warn_threshold, UINT32_MAX);
 
     cmap_init(&dp->poll_threads);
     dp->pmd_rxq_assign_type = SCHED_CYCLES;
@@ -4846,6 +4853,7 @@ dpif_netdev_set_config(struct dpif *dpif, const struct smap *other_config)
                         DEFAULT_EM_FLOW_INSERT_INV_PROB);
     uint32_t insert_min, cur_min;
     uint32_t tx_flush_interval, cur_tx_flush_interval;
+    uint32_t cycles, cur_cycles;
     uint64_t rebalance_intvl;
     uint8_t cur_rebalance_load;
     uint32_t rebalance_load, rebalance_improve;
@@ -4861,6 +4869,57 @@ dpif_netdev_set_config(struct dpif *dpif, const struct smap *other_config)
         atomic_store_relaxed(&dp->tx_flush_interval, tx_flush_interval);
         VLOG_INFO("Flushing interval for tx queues set to %"PRIu32" us",
                   tx_flush_interval);
+    }
+
+    cycles = smap_get_int(other_config, "rx-warn-threshold",
+                          UINT32_MAX);
+    if (cycles != UINT32_MAX) {
+         cycles = cycles * rte_get_tsc_hz() / 1000000;
+    }
+    atomic_read_relaxed(&dp->rx_cycles_warn_threshold, &cur_cycles);
+    if (cycles != cur_cycles) {
+        atomic_store_relaxed(&dp->rx_cycles_warn_threshold, cycles);
+        if (cycles == UINT32_MAX || cur_cycles == UINT32_MAX) {
+            VLOG_INFO("%sabling Rx logging",
+                      cycles == UINT32_MAX ? "Dis" : "En");
+        } else {
+            VLOG_INFO("Changing Rx cycles threshold from %"PRIu32" to %"PRIu32,
+                      cur_cycles, cycles);
+        }
+    }
+
+    cycles = smap_get_int(other_config, "upcall-warn-threshold",
+                          UINT32_MAX);
+    if (cycles != UINT32_MAX) {
+         cycles = cycles * rte_get_tsc_hz() / 1000000;
+    }
+    atomic_read_relaxed(&dp->upcall_cycles_warn_threshold, &cur_cycles);
+    if (cycles != cur_cycles) {
+        atomic_store_relaxed(&dp->upcall_cycles_warn_threshold, cycles);
+        if (cycles == UINT32_MAX || cur_cycles == UINT32_MAX) {
+            VLOG_INFO("%sabling upcall logging",
+                      cycles == UINT32_MAX ? "Dis" : "En");
+        } else {
+            VLOG_INFO("Changing upcall cycles threshold from %"PRIu32" to %"PRIu32,
+                      cur_cycles, cycles);
+        }
+    }
+
+    cycles = smap_get_int(other_config, "tx-warn-threshold",
+                          UINT32_MAX);
+    if (cycles != UINT32_MAX) {
+         cycles = cycles * rte_get_tsc_hz() / 1000000;
+    }
+    atomic_read_relaxed(&dp->tx_cycles_warn_threshold, &cur_cycles);
+    if (cycles != cur_cycles) {
+        atomic_store_relaxed(&dp->tx_cycles_warn_threshold, cycles);
+        if (cycles == UINT32_MAX || cur_cycles == UINT32_MAX) {
+            VLOG_INFO("%sabling Tx logging",
+                      cycles == UINT32_MAX ? "Dis" : "En");
+        } else {
+            VLOG_INFO("Changing Tx cycles threshold from %"PRIu32" to %"PRIu32,
+                      cur_cycles, cycles);
+        }
     }
 
     if (!nullable_string_is_equal(dp->pmd_cmask, cmask)) {
@@ -5288,8 +5347,11 @@ dp_netdev_pmd_flush_output_on_port(struct dp_netdev_pmd_thread *pmd,
     struct cycle_timer timer;
     uint64_t cycles;
     uint32_t tx_flush_interval;
+    uint32_t tx_cycles_warn_threshold;
 
     cycle_timer_start(&pmd->perf_stats, &timer);
+    atomic_read_relaxed(&pmd->dp->tx_cycles_warn_threshold,
+                        &tx_cycles_warn_threshold);
 
     output_cnt = dp_packet_batch_size(&p->output_pkts);
     ovs_assert(output_cnt > 0);
@@ -5326,6 +5388,13 @@ dp_netdev_pmd_flush_output_on_port(struct dp_netdev_pmd_thread *pmd,
                 pmd->perf_stats.current.tx_cycles += cycles;
                 histogram_add_sample(&pmd->perf_stats.tx_cycles, cycles);
             }
+            if (cycles >= tx_cycles_warn_threshold) {
+                VLOG_WARN("Tx on %s queue %u took %"PRIu64" us "
+                          "(%"PRIuSIZE" cycles) for %"PRIuSIZE" packets",
+                          netdev_get_name(p->port->netdev), i,
+                          1000000 * cycles / rte_get_tsc_hz(), cycles,
+                          dp_packet_batch_size(&p->txq_pkts[i]));
+            }
             dp_packet_batch_init(&p->txq_pkts[i]);
         }
     } else {
@@ -5343,6 +5412,13 @@ dp_netdev_pmd_flush_output_on_port(struct dp_netdev_pmd_thread *pmd,
             pmd->perf_stats.current.tx++;
             pmd->perf_stats.current.tx_cycles += cycles;
             histogram_add_sample(&pmd->perf_stats.tx_cycles, cycles);
+        }
+        if (cycles >= tx_cycles_warn_threshold) {
+            VLOG_WARN("Tx on %s queue %u took %"PRIu64" us "
+                      "(%"PRIuSIZE" cycles) for %"PRIuSIZE" packets",
+                      netdev_get_name(p->port->netdev), tx_qid,
+                      1000000 * cycles / rte_get_tsc_hz(), cycles,
+                      dp_packet_batch_size(&p->output_pkts));
         }
     }
     dp_packet_batch_init(&p->output_pkts);
@@ -5402,9 +5478,12 @@ dp_netdev_process_rxq_port(struct dp_netdev_pmd_thread *pmd,
     int batch_cnt = 0;
     int rem_qlen = 0, *qlen_p = NULL;
     uint64_t cycles;
+    uint32_t rx_cycles_warn_threshold;
 
     /* Measure duration for polling and processing rx burst. */
     cycle_timer_start(&pmd->perf_stats, &timer);
+    atomic_read_relaxed(&pmd->dp->rx_cycles_warn_threshold,
+                        &rx_cycles_warn_threshold);
 
     pmd->ctx.last_rxq = rxq;
     dp_packet_batch_init(&batch);
@@ -5421,6 +5500,13 @@ dp_netdev_process_rxq_port(struct dp_netdev_pmd_thread *pmd,
         s->current.rx++;
         s->current.rx_cycles += cycles;
         histogram_add_sample(&s->rx_cycles, cycles);
+    }
+    if (cycles >= rx_cycles_warn_threshold) {
+        VLOG_WARN("Rx on %s queue %u took %"PRIu64" us (%"PRIuSIZE" cycles) "
+                  "for %"PRIuSIZE" packets",
+                  netdev_get_name(rxq->rx->netdev), rxq->rx->queue_id,
+                  1000000 * cycles / rte_get_tsc_hz(), cycles,
+                  error ? 0 : dp_packet_batch_size(&batch));
     }
     if (!error) {
         /* At least one packet received. */
@@ -8396,6 +8482,7 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
                      const struct netdev_flow_key *key,
                      struct ofpbuf *actions, struct ofpbuf *put_actions)
 {
+    uint32_t upcall_cycles_warn_threshold;
     struct ofpbuf *add_actions;
     struct dp_packet_batch b;
     struct match match;
@@ -8459,13 +8546,19 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
         smc_insert(pmd, key, hash);
         emc_probabilistic_insert(pmd, key, netdev_flow);
     }
+    cycles = cycles_counter_update(&pmd->perf_stats) - cycles;
     if (pmd_perf_metrics_enabled(pmd)) {
         /* Update upcall stats. */
-        cycles = cycles_counter_update(&pmd->perf_stats) - cycles;
         struct pmd_perf_stats *s = &pmd->perf_stats;
         s->current.upcalls++;
         s->current.upcall_cycles += cycles;
         histogram_add_sample(&s->cycles_per_upcall, cycles);
+    }
+    atomic_read_relaxed(&pmd->dp->upcall_cycles_warn_threshold,
+                        &upcall_cycles_warn_threshold);
+    if (cycles >= upcall_cycles_warn_threshold) {
+        VLOG_WARN("Upcall on port %u took %"PRIu64" us (%"PRIuSIZE" cycles)",
+                  orig_in_port, 1000000 * cycles / rte_get_tsc_hz(), cycles);
     }
     return error;
 }
