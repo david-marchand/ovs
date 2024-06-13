@@ -308,6 +308,14 @@ netdev_tnl_push_udp_header(const struct netdev *netdev OVS_UNUSED,
     if (l4_ofs != UINT16_MAX) {
         packet->inner_l4_ofs = l4_ofs + data->header_len;
     }
+
+    if (dp_packet_hwol_is_tso(packet)) {
+        uint16_t tso_segsz = dp_packet_get_tso_segsz(packet);
+        if (tso_segsz > data->header_len) {
+            tso_segsz -= data->header_len;
+            dp_packet_set_tso_segsz(packet, tso_segsz);
+        }
+    }
 }
 
 static void *
