@@ -153,12 +153,14 @@ void *
 netdev_tnl_push_ip_header(struct dp_packet *packet, const void *header,
                           int size, int *ip_tot_size, ovs_be32 ipv6_label)
 {
-    struct eth_header *eth;
-    struct ip_header *ip;
     struct ovs_16aligned_ip6_hdr *ip6;
+    struct eth_header *eth;
+    uint32_t payload_size;
+    struct ip_header *ip;
 
     eth = dp_packet_push_uninit(packet, size);
-    *ip_tot_size = dp_packet_size(packet) - sizeof (struct eth_header);
+    payload_size = dp_packet_size(packet) - dp_packet_l2_pad_size(packet);
+    *ip_tot_size = payload_size - sizeof (struct eth_header);
 
     memcpy(eth, header, size);
     /* The encapsulated packet has type Ethernet. Adjust dp_packet. */
@@ -171,7 +173,7 @@ netdev_tnl_push_ip_header(struct dp_packet *packet, const void *header,
         *ip_tot_size -= IPV6_HEADER_LEN;
         ip6->ip6_plen = htons(*ip_tot_size);
         packet_set_ipv6_flow_label(&ip6->ip6_flow, ipv6_label);
-        packet->l4_ofs = dp_packet_size(packet) - *ip_tot_size;
+        packet->l4_ofs = payload_size - *ip_tot_size;
 
         if (dp_packet_hwol_is_tunnel_geneve(packet) ||
             dp_packet_hwol_is_tunnel_vxlan(packet)) {
@@ -197,7 +199,7 @@ netdev_tnl_push_ip_header(struct dp_packet *packet, const void *header,
 
         dp_packet_ol_reset_ip_csum_good(packet);
         *ip_tot_size -= IP_HEADER_LEN;
-        packet->l4_ofs = dp_packet_size(packet) - *ip_tot_size;
+        packet->l4_ofs = payload_size - *ip_tot_size;
         return ip + 1;
     }
 }
