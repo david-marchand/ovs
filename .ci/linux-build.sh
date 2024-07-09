@@ -171,7 +171,7 @@ else
         if [ "${testsuite##*dpdk}" != "$testsuite" ]; then
             sudo sh -c 'echo 1024 > /proc/sys/vm/nr_hugepages' || true
             [ "$(cat /proc/sys/vm/nr_hugepages)" = '1024' ]
-            export DPDK_EAL_OPTIONS="--lcores 0@1,1@1,2@1"
+            export DPDK_EAL_OPTIONS="--lcores 0@1,1@1,2@1 --log-level=*:debug"
         fi
         $run_as_root make $testsuite TESTSUITEFLAGS="${JOBS} ${TEST_RANGE}" \
                                      RECHECK=yes
