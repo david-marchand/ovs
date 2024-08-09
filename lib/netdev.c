@@ -1285,14 +1285,13 @@ netdev_features_to_bps(enum netdev_features features,
                                      : default_bps);
 }
 
-/* Returns true if any of the NETDEV_F_* bits that indicate a full-duplex link
- * are set in 'features', otherwise false. */
+/* Returns true if any of the NETDEV_F_* bits that indicate a half-duplex link
+ * are unset in 'features', otherwise false. */
 bool
 netdev_features_is_full_duplex(enum netdev_features features)
 {
-    return (features & (NETDEV_F_10MB_FD | NETDEV_F_100MB_FD | NETDEV_F_1GB_FD
-                        | NETDEV_F_10GB_FD | NETDEV_F_40GB_FD
-                        | NETDEV_F_100GB_FD | NETDEV_F_1TB_FD)) != 0;
+    return (features & (NETDEV_F_10MB_HD | NETDEV_F_100MB_HD
+                        | NETDEV_F_1GB_HD)) == 0;
 }
 
 /* Set the features advertised by 'netdev' to 'advertise'.  Returns 0 if
