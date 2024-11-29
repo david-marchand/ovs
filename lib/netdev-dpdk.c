@@ -2028,13 +2028,15 @@ netdev_dpdk_lookup_by_port_id(dpdk_port_t port_id)
 }
 
 static dpdk_port_t
-netdev_dpdk_get_port_by_mac(const char *mac_str)
+netdev_dpdk_get_port_by_mac(const char *mac_str, char **extra_err)
 {
     dpdk_port_t port_id;
     struct eth_addr mac, port_mac;
 
+    *extra_err = NULL;
+
     if (!eth_addr_from_string(mac_str, &mac)) {
-        VLOG_ERR("invalid mac: %s", mac_str);
+        *extra_err = xstrdup("invalid mac");
         return DPDK_ETH_PORT_ID_INVALID;
     }
 
@@ -2048,6 +2050,7 @@ netdev_dpdk_get_port_by_mac(const char *mac_str)
         }
     }
 
+    *extra_err = xstrdup("unknown mac");
     return DPDK_ETH_PORT_ID_INVALID;
 }
 
@@ -2084,32 +2087,40 @@ netdev_dpdk_process_devargs(struct netdev_dpdk *dev,
     OVS_REQUIRES(dpdk_mutex)
 {
     dpdk_port_t new_port_id;
+    char *extra_err = NULL;
 
     if (strncmp(devargs, "class=eth,mac=", 14) == 0) {
-        new_port_id = netdev_dpdk_get_port_by_mac(&devargs[14]);
+        new_port_id = netdev_dpdk_get_port_by_mac(&devargs[14], &extra_err);
     } else {
         new_port_id = netdev_dpdk_get_port_by_devargs(devargs);
         if (!rte_eth_dev_is_valid_port(new_port_id)) {
-            /* Device not found in DPDK, attempt to attach it */
-            if (rte_dev_probe(devargs)) {
+            int ret;
+
+            /* Port not found in DPDK, attempt to attach the device. */
+            ret = rte_dev_probe(devargs);
+            if (ret < 0) {
                 new_port_id = DPDK_ETH_PORT_ID_INVALID;
+                extra_err = xstrdup(ovs_strerror(-ret));
             } else {
                 new_port_id = netdev_dpdk_get_port_by_devargs(devargs);
                 if (rte_eth_dev_is_valid_port(new_port_id)) {
-                    /* Attach successful */
+                    /* Port lookup successful. */
                     dev->attached = true;
                     VLOG_INFO("Device '%s' attached to DPDK", devargs);
                 } else {
-                    /* Attach unsuccessful */
+                    /* Port lookup unsuccessful. */
                     new_port_id = DPDK_ETH_PORT_ID_INVALID;
+                    extra_err = xstrdup("port unknown");
                 }
             }
         }
     }
 
     if (new_port_id == DPDK_ETH_PORT_ID_INVALID) {
-        VLOG_WARN_BUF(errp, "Error attaching device '%s' to DPDK", devargs);
+        VLOG_WARN_BUF(errp, "Error attaching device '%s' to DPDK: %s", devargs,
+                      extra_err ? extra_err : "unknown error");
     }
+    free(extra_err);
 
     return new_port_id;
 }
