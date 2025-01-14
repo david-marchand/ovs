@@ -111,26 +111,28 @@ enum dp_packet_offload_mask {
     /* Adding new field requires adding to DP_PACKET_OL_SUPPORTED_MASK. */
 };
 
+#define DP_PACKET_OL_TX_MASK (DP_PACKET_OL_TX_TCP_SEG         | \
+                              DP_PACKET_OL_TX_IPV4            | \
+                              DP_PACKET_OL_TX_IPV6            | \
+                              DP_PACKET_OL_TX_TCP_CKSUM       | \
+                              DP_PACKET_OL_TX_UDP_CKSUM       | \
+                              DP_PACKET_OL_TX_SCTP_CKSUM      | \
+                              DP_PACKET_OL_TX_IP_CKSUM        | \
+                              DP_PACKET_OL_TX_TUNNEL_GENEVE   | \
+                              DP_PACKET_OL_TX_TUNNEL_VXLAN    | \
+                              DP_PACKET_OL_TX_TUNNEL_GRE      | \
+                              DP_PACKET_OL_TX_OUTER_IPV4      | \
+                              DP_PACKET_OL_TX_OUTER_IP_CKSUM  | \
+                              DP_PACKET_OL_TX_OUTER_UDP_CKSUM | \
+                              DP_PACKET_OL_TX_OUTER_IPV6)
+
 #define DP_PACKET_OL_SUPPORTED_MASK (DP_PACKET_OL_RSS_HASH           | \
                                      DP_PACKET_OL_FLOW_MARK          | \
                                      DP_PACKET_OL_RX_L4_CKSUM_BAD    | \
                                      DP_PACKET_OL_RX_IP_CKSUM_BAD    | \
                                      DP_PACKET_OL_RX_L4_CKSUM_GOOD   | \
                                      DP_PACKET_OL_RX_IP_CKSUM_GOOD   | \
-                                     DP_PACKET_OL_TX_TCP_SEG         | \
-                                     DP_PACKET_OL_TX_IPV4            | \
-                                     DP_PACKET_OL_TX_IPV6            | \
-                                     DP_PACKET_OL_TX_TCP_CKSUM       | \
-                                     DP_PACKET_OL_TX_UDP_CKSUM       | \
-                                     DP_PACKET_OL_TX_SCTP_CKSUM      | \
-                                     DP_PACKET_OL_TX_IP_CKSUM        | \
-                                     DP_PACKET_OL_TX_TUNNEL_GENEVE   | \
-                                     DP_PACKET_OL_TX_TUNNEL_VXLAN    | \
-                                     DP_PACKET_OL_TX_TUNNEL_GRE      | \
-                                     DP_PACKET_OL_TX_OUTER_IPV4      | \
-                                     DP_PACKET_OL_TX_OUTER_IP_CKSUM  | \
-                                     DP_PACKET_OL_TX_OUTER_UDP_CKSUM | \
-                                     DP_PACKET_OL_TX_OUTER_IPV6)
+                                     DP_PACKET_OL_TX_MASK)
 
 #define DP_PACKET_OL_TX_L4_MASK (DP_PACKET_OL_TX_TCP_CKSUM | \
                                  DP_PACKET_OL_TX_UDP_CKSUM | \
@@ -1314,15 +1316,6 @@ static inline void
 dp_packet_hwol_set_tunnel_gre(struct dp_packet *b)
 {
     *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_TUNNEL_GRE;
-}
-
-/* Clears tunnel offloading marks. */
-static inline void
-dp_packet_hwol_reset_tunnel(struct dp_packet *b)
-{
-    *dp_packet_ol_flags_ptr(b) &= ~(DP_PACKET_OL_TX_TUNNEL_VXLAN |
-                                    DP_PACKET_OL_TX_TUNNEL_GRE |
-                                    DP_PACKET_OL_TX_TUNNEL_GENEVE);
 }
 
 /* Mark packet 'b' as a tunnel packet with outer IPv4 header. */

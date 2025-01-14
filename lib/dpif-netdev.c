@@ -115,7 +115,6 @@ COVERAGE_DEFINE(datapath_drop_lock_error);
 COVERAGE_DEFINE(datapath_drop_userspace_action_error);
 COVERAGE_DEFINE(datapath_drop_tunnel_push_error);
 COVERAGE_DEFINE(datapath_drop_tunnel_pop_error);
-COVERAGE_DEFINE(datapath_drop_tunnel_tso_recirc);
 COVERAGE_DEFINE(datapath_drop_recirc_error);
 COVERAGE_DEFINE(datapath_drop_invalid_port);
 COVERAGE_DEFINE(datapath_drop_invalid_bond);
@@ -8488,6 +8487,31 @@ dfc_processing_enqueue_classified_packet(struct dp_packet *packet,
 
 }
 
+struct tx_tunnel_offloads {
+    uint64_t ol_flags;
+    uint16_t inner_l3_ofs;
+    uint16_t inner_l4_ofs;
+};
+
+static inline void
+save_tunnel_offloads(struct dp_packet *p, struct tx_tunnel_offloads *txo)
+{
+    txo->ol_flags = *dp_packet_ol_flags_ptr(p) & DP_PACKET_OL_TX_MASK;
+    txo->inner_l3_ofs = p->inner_l3_ofs;
+    txo->inner_l4_ofs = p->inner_l4_ofs;
+}
+
+static inline void
+restore_tunnel_offloads(struct dp_packet *p, struct tx_tunnel_offloads *txo)
+{
+    uint64_t ol_flags;
+
+    ol_flags = *dp_packet_ol_flags_ptr(p) & ~DP_PACKET_OL_TX_MASK;
+    *dp_packet_ol_flags_ptr(p) = ol_flags | txo->ol_flags;
+    p->inner_l3_ofs = txo->inner_l3_ofs;
+    p->inner_l4_ofs = txo->inner_l4_ofs;
+}
+
 /* Try to process all ('cnt') the 'packets' using only the datapath flow cache
  * 'pmd->flow_cache'. If a flow is not found for a packet 'packets[i]', the
  * miniflow is copied into 'keys' and the packet pointer is moved at the
@@ -8520,6 +8544,7 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
     size_t n_mfex_opt_hit = 0, n_simple_hit = 0;
     struct dfc_cache *cache = &pmd->flow_cache;
     struct netdev_flow_key *key = &keys[0];
+    struct tx_tunnel_offloads txo = {0};
     struct dp_packet *packet;
     size_t map_cnt = 0;
     bool batch_enable = true;
@@ -8555,6 +8580,8 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
 
         if (!md_is_valid) {
             pkt_metadata_init(&packet->md, port_no);
+        } else if (dp_packet_hwol_is_tunnel(packet)) {
+            save_tunnel_offloads(packet, &txo);
         }
 
         if (netdev_flow_api && recirc_depth == 0) {
@@ -8566,6 +8593,7 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
             }
             if (OVS_LIKELY(flow)) {
                 tcp_flags = parse_tcp_flags(packet, NULL, NULL, NULL);
+                /* recirc_depth == 0, so there is no Tx offload to restore. */
                 n_phwol_hit++;
                 dfc_processing_enqueue_classified_packet(
                         packet, flow, tcp_flags, batch_enable,
@@ -8579,6 +8607,9 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
             uint8_t nw_frag = 0;
 
             tcp_flags = parse_tcp_flags(packet, &dl_type, &nw_frag, &vlan_tci);
+            if (md_is_valid && dp_packet_hwol_is_tunnel(packet)) {
+                restore_tunnel_offloads(packet, &txo);
+            }
             flow = dp_netdev_simple_match_lookup(pmd, port_no, dl_type,
                                                  nw_frag, vlan_tci);
             if (OVS_LIKELY(flow)) {
@@ -8592,10 +8623,15 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
 
         miniflow_extract(packet, &key->mf);
         key->len = 0; /* Not computed yet. */
-        key->hash =
-                (md_is_valid == false)
-                ? dpif_netdev_packet_get_rss_hash_orig_pkt(packet, &key->mf)
-                : dpif_netdev_packet_get_rss_hash(packet, &key->mf);
+        if (!md_is_valid) {
+            key->hash =
+                dpif_netdev_packet_get_rss_hash_orig_pkt(packet, &key->mf);
+        } else {
+            key->hash = dpif_netdev_packet_get_rss_hash(packet, &key->mf);
+            if (dp_packet_hwol_is_tunnel(packet)) {
+                restore_tunnel_offloads(packet, &txo);
+            }
+        }
 
         /* If EMC is disabled skip emc_lookup */
         flow = (cur_min != 0) ? emc_lookup(&cache->emc_cache, key) : NULL;
@@ -8923,32 +8959,6 @@ static void
 dp_netdev_recirculate(struct dp_netdev_pmd_thread *pmd,
                       struct dp_packet_batch *packets)
 {
-    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-    size_t i, size = dp_packet_batch_size(packets);
-    struct dp_packet *packet;
-
-    DP_PACKET_BATCH_REFILL_FOR_EACH (i, size, packet, packets) {
-        if (dp_packet_hwol_is_tunnel(packet)) {
-            if (dp_packet_hwol_is_tso(packet)) {
-                /* Can't perform GSO in the middle of a pipeline. */
-                COVERAGE_INC(datapath_drop_tunnel_tso_recirc);
-                dp_packet_delete(packet);
-                VLOG_WARN_RL(&rl, "Recirculating tunnel packets with "
-                                  "TSO is not supported");
-                continue;
-            }
-            /* Have to fix all the checksums before re-parsing, because the
-             * packet will be treated as having a single set of headers. */
-            dp_packet_ol_send_prepare(packet, 0);
-            /* This packet must not be marked with anything tunnel-related. */
-            dp_packet_hwol_reset_tunnel(packet);
-            /* Clear inner offsets.  Other ones are collateral, but they will
-             * be re-initialized on re-parsing. */
-            dp_packet_reset_offsets(packet);
-        }
-        dp_packet_batch_refill(packets, packet, i);
-    }
-
     dp_netdev_input__(pmd, packets, true, 0);
 }
 
