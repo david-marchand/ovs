@@ -95,8 +95,6 @@ dp_packet_gso(struct dp_packet *p, struct dp_packet_batch **batches)
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
     struct dp_packet_batch *curr_batch = *batches;
     struct tcp_header *tcp_hdr;
-    uint16_t inner_ip_id = 0;
-    uint16_t outer_ip_id = 0;
     struct dp_packet *seg;
     uint16_t tcp_offset;
     uint16_t tso_segsz;
@@ -118,22 +116,9 @@ dp_packet_gso(struct dp_packet *p, struct dp_packet_batch **batches)
     if (udp_tnl || gre_tnl) {
         outer_ipv4 = dp_packet_hwol_is_outer_ipv4(p);
         tcp_hdr = dp_packet_inner_l4(p);
-
-        if (outer_ipv4) {
-            outer_ip_id = ntohs(((struct ip_header *) dp_packet_l3(p))->ip_id);
-        }
-        if (dp_packet_hwol_is_ipv4(p)) {
-            struct ip_header *ip_hdr = dp_packet_inner_l3(p);
-            inner_ip_id = ntohs(ip_hdr->ip_id);
-        }
     } else {
         outer_ipv4 = dp_packet_hwol_is_ipv4(p);
         tcp_hdr = dp_packet_l4(p);
-
-        if (outer_ipv4) {
-            struct ip_header *ip_hdr = dp_packet_l3(p);
-            outer_ip_id = ntohs(ip_hdr->ip_id);
-        }
     }
 
     tcp_offset = TCP_OFFSET(tcp_hdr->tcp_ctl);
@@ -165,11 +150,11 @@ dp_packet_gso(struct dp_packet *p, struct dp_packet_batch **batches)
         if (udp_tnl || gre_tnl) {
             /* Update tunnel inner L3 header. */
             if (dp_packet_hwol_is_ipv4(seg)) {
+                struct ip_header *ip_hdr_orig = dp_packet_inner_l3(p);
                 struct ip_header *ip_hdr = dp_packet_inner_l3(seg);
                 ip_hdr->ip_tot_len = htons(dp_packet_inner_l3_size(seg));
-                ip_hdr->ip_id = htons(inner_ip_id);
+                ip_hdr->ip_id = htons(ntohs(ip_hdr_orig->ip_id) + i);
                 ip_hdr->ip_csum = 0;
-                inner_ip_id++;
             } else {
                 struct ovs_16aligned_ip6_hdr *ip6_hdr;
 
@@ -181,11 +166,11 @@ dp_packet_gso(struct dp_packet *p, struct dp_packet_batch **batches)
 
         /* Update L3 header. */
         if (outer_ipv4) {
+            struct ip_header *ip_hdr_orig = dp_packet_l3(p);
             struct ip_header *ip_hdr = dp_packet_l3(seg);
             ip_hdr->ip_tot_len = htons(dp_packet_l3_size(seg));
-            ip_hdr->ip_id = htons(outer_ip_id);
+            ip_hdr->ip_id = htons(ntohs(ip_hdr_orig->ip_id) + i);
             ip_hdr->ip_csum = 0;
-            outer_ip_id++;
         } else {
             struct ovs_16aligned_ip6_hdr *ip6_hdr = dp_packet_l3(seg);
 
