@@ -558,22 +558,22 @@ void
 dp_packet_tnl_outer_ol_send_prepare(struct dp_packet *p,
                                     uint64_t flags)
 {
-    if (dp_packet_hwol_is_outer_ipv4_cksum(p)) {
+    if (dp_packet_hwol_tx_ip_csum(p)) {
         if (!(flags & NETDEV_TX_OFFLOAD_OUTER_IP_CKSUM)) {
             dp_packet_ip_set_header_csum(p, false);
             dp_packet_ol_set_ip_csum_good(p);
-            dp_packet_hwol_reset_outer_ipv4_csum(p);
+            dp_packet_hwol_reset_tx_ip_csum(p);
         }
     }
 
-    if (!dp_packet_hwol_is_outer_udp_cksum(p)) {
+    if (!dp_packet_hwol_l4_is_udp(p)) {
         return;
     }
 
     if (!(flags & NETDEV_TX_OFFLOAD_OUTER_UDP_CKSUM)) {
         packet_udp_complete_csum(p, false);
         dp_packet_ol_set_l4_csum_good(p);
-        dp_packet_hwol_reset_outer_udp_csum(p);
+        dp_packet_hwol_reset_csum_udp(p);
     }
 }
 
@@ -598,7 +598,7 @@ dp_packet_ol_send_prepare(struct dp_packet *p, uint64_t flags)
          * required, then we can't offload inner checksum either. As that would
          * invalidate the outer checksum. */
         if (!(flags & NETDEV_TX_OFFLOAD_OUTER_UDP_CKSUM) &&
-                dp_packet_hwol_is_outer_udp_cksum(p)) {
+                dp_packet_hwol_l4_is_udp(p)) {
             flags &= ~(NETDEV_TX_OFFLOAD_TCP_CKSUM |
                        NETDEV_TX_OFFLOAD_UDP_CKSUM |
                        NETDEV_TX_OFFLOAD_SCTP_CKSUM |

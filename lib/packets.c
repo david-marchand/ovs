@@ -2014,13 +2014,13 @@ packet_tcp_complete_csum(struct dp_packet *p, bool inner)
     ovs_assert(tcp);
     ovs_assert(ip_hdr);
 
-    if (!inner && dp_packet_hwol_is_outer_ipv6(p)) {
+    if (!inner && dp_packet_hwol_tx_ipv6(p)) {
         is_v4 = false;
-    } else if (!inner && dp_packet_hwol_is_outer_ipv4(p)) {
+    } else if (!inner && dp_packet_hwol_is_ipv4(p)) {
         is_v4 = true;
-    } else if (dp_packet_hwol_is_ipv4(p)) {
+    } else if (dp_packet_hwol_is_inner_ipv4(p)) {
         is_v4 = true;
-    } else if (dp_packet_hwol_tx_ipv6(p)) {
+    } else if (dp_packet_hwol_is_inner_ipv6(p)) {
         is_v4 = false;
     } else {
         OVS_NOT_REACHED();
@@ -2068,13 +2068,13 @@ packet_udp_complete_csum(struct dp_packet *p, bool inner)
         return;
     }
 
-    if (!inner && dp_packet_hwol_is_outer_ipv6(p)) {
+    if (!inner && dp_packet_hwol_tx_ipv6(p)) {
         is_v4 = false;
-    } else if (!inner && dp_packet_hwol_is_outer_ipv4(p)) {
+    } else if (!inner && dp_packet_hwol_is_ipv4(p)) {
         is_v4 = true;
-    } else if (dp_packet_hwol_is_ipv4(p)) {
+    } else if (dp_packet_hwol_is_inner_ipv4(p)) {
         is_v4 = true;
-    } else if (dp_packet_hwol_tx_ipv6(p)) {
+    } else if (dp_packet_hwol_is_inner_ipv6(p)) {
         is_v4 = false;
     } else {
         OVS_NOT_REACHED();

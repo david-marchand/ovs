@@ -100,7 +100,6 @@ dp_packet_gso(struct dp_packet *p, struct dp_packet_batch **batches)
     uint16_t tcp_offset;
     uint16_t tso_segsz;
     uint32_t tcp_seq;
-    bool outer_ipv4;
     int hdr_len;
     int seg_len;
     bool udp_tnl = dp_packet_hwol_is_tunnel_vxlan(p) ||
@@ -115,10 +114,8 @@ dp_packet_gso(struct dp_packet *p, struct dp_packet_batch **batches)
     }
 
     if (udp_tnl || gre_tnl) {
-        outer_ipv4 = dp_packet_hwol_is_outer_ipv4(p);
         tcp_hdr = dp_packet_inner_l4(p);
     } else {
-        outer_ipv4 = dp_packet_hwol_is_ipv4(p);
         tcp_hdr = dp_packet_l4(p);
     }
 
@@ -150,7 +147,7 @@ dp_packet_gso(struct dp_packet *p, struct dp_packet_batch **batches)
 
         if (udp_tnl || gre_tnl) {
             /* Update tunnel inner L3 header. */
-            if (dp_packet_hwol_is_ipv4(seg)) {
+            if (dp_packet_hwol_is_inner_ipv4(seg)) {
                 struct ip_header *ip_hdr_orig = dp_packet_inner_l3(p);
                 struct ip_header *ip_hdr = dp_packet_inner_l3(seg);
                 ip_hdr->ip_tot_len = htons(dp_packet_inner_l3_size(seg));
@@ -166,7 +163,7 @@ dp_packet_gso(struct dp_packet *p, struct dp_packet_batch **batches)
         }
 
         /* Update L3 header. */
-        if (outer_ipv4) {
+        if (dp_packet_hwol_is_ipv4(p)) {
             struct ip_header *ip_hdr_orig = dp_packet_l3(p);
             struct ip_header *ip_hdr = dp_packet_l3(seg);
             ip_hdr->ip_tot_len = htons(dp_packet_l3_size(seg));

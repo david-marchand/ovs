@@ -2656,12 +2656,12 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
                                  (char *) dp_packet_l3(pkt);
 
             /* Outer header checksum offloads. */
-            ol_flags |= dp_packet_hwol_is_outer_ipv4(pkt)
+            ol_flags |= dp_packet_hwol_is_ipv4(pkt)
                 ? RTE_MBUF_F_TX_OUTER_IPV4 : RTE_MBUF_F_TX_OUTER_IPV6;
-            if (dp_packet_hwol_is_outer_ipv4_cksum(pkt)) {
+            if (dp_packet_hwol_tx_ip_csum(pkt)) {
                 ol_flags |= RTE_MBUF_F_TX_OUTER_IP_CKSUM;
             }
-            if (dp_packet_hwol_is_outer_udp_cksum(pkt)) {
+            if (dp_packet_hwol_l4_is_udp(pkt)) {
                 ol_flags |= RTE_MBUF_F_TX_OUTER_UDP_CKSUM;
             }
             if (dp_packet_hwol_is_tunnel_geneve(pkt)) {
@@ -2687,6 +2687,22 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
         }
 
         /* Inner header checksum offloads. */
+        ol_flags |= dp_packet_hwol_is_inner_ipv4(pkt)
+            ? RTE_MBUF_F_TX_IPV4 : RTE_MBUF_F_TX_IPV6;
+        if (dp_packet_hwol_is_inner_ip_csum(pkt)) {
+            ol_flags |= RTE_MBUF_F_TX_IP_CKSUM;
+        }
+        if (dp_packet_hwol_l4_is_inner_tcp(pkt)) {
+            ol_flags |= RTE_MBUF_F_TX_TCP_CKSUM;
+        } else if (dp_packet_hwol_l4_is_inner_udp(pkt)) {
+            ol_flags |= RTE_MBUF_F_TX_UDP_CKSUM;
+        } else if (dp_packet_hwol_l4_is_inner_sctp(pkt)) {
+            ol_flags |= RTE_MBUF_F_TX_SCTP_CKSUM;
+        }
+    } else {
+        mbuf->outer_l2_len = 0;
+        mbuf->outer_l3_len = 0;
+
         ol_flags |= dp_packet_hwol_is_ipv4(pkt)
             ? RTE_MBUF_F_TX_IPV4 : RTE_MBUF_F_TX_IPV6;
         if (dp_packet_hwol_tx_ip_csum(pkt)) {
@@ -2698,36 +2714,6 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
             ol_flags |= RTE_MBUF_F_TX_UDP_CKSUM;
         } else if (dp_packet_hwol_l4_is_sctp(pkt)) {
             ol_flags |= RTE_MBUF_F_TX_SCTP_CKSUM;
-        }
-    } else {
-        mbuf->outer_l2_len = 0;
-        mbuf->outer_l3_len = 0;
-
-        if (dp_packet_hwol_is_tunnel(pkt)) {
-            /* No inner offload is requested, fallback to non tunnel
-             * checksum offloads. */
-            ol_flags |= dp_packet_hwol_is_outer_ipv4(pkt)
-                ? RTE_MBUF_F_TX_IPV4 : RTE_MBUF_F_TX_IPV6;
-            if (dp_packet_hwol_is_outer_ipv4_cksum(pkt)) {
-                ol_flags |= RTE_MBUF_F_TX_IP_CKSUM;
-            }
-            if (dp_packet_hwol_is_outer_udp_cksum(pkt)) {
-                ol_flags |= RTE_MBUF_F_TX_UDP_CKSUM;
-            }
-        } else {
-            ol_flags |= dp_packet_hwol_is_ipv4(pkt)
-                ? RTE_MBUF_F_TX_IPV4 : RTE_MBUF_F_TX_IPV6;
-            if (dp_packet_hwol_tx_ip_csum(pkt)) {
-                ol_flags |= RTE_MBUF_F_TX_IP_CKSUM;
-            }
-            if (dp_packet_hwol_l4_is_tcp(pkt)) {
-                ol_flags |= RTE_MBUF_F_TX_TCP_CKSUM;
-            } else if (dp_packet_hwol_l4_is_udp(pkt)) {
-                ol_flags |= RTE_MBUF_F_TX_UDP_CKSUM;
-            } else if (dp_packet_hwol_l4_is_sctp(pkt)) {
-                ol_flags |= RTE_MBUF_F_TX_SCTP_CKSUM;
-            }
-
         }
 
         l2 = dp_packet_eth(pkt);
