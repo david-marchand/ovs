@@ -2629,27 +2629,13 @@ static bool
 netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
 {
     struct dp_packet *pkt = CONTAINER_OF(mbuf, struct dp_packet, mbuf);
+    uint32_t tx_offloads = dp_packet_hwol_tx_offloads(pkt);
+    uint64_t ol_flags = 0;
     void *l2;
     void *l3;
     void *l4;
 
-    const uint64_t all_inner_requests = (RTE_MBUF_F_TX_IP_CKSUM |
-                                         RTE_MBUF_F_TX_L4_MASK |
-                                         RTE_MBUF_F_TX_TCP_SEG);
-    const uint64_t all_outer_requests = (RTE_MBUF_F_TX_OUTER_IP_CKSUM |
-                                         RTE_MBUF_F_TX_OUTER_UDP_CKSUM);
-    const uint64_t all_requests = all_inner_requests | all_outer_requests;
-    const uint64_t all_inner_marks = (RTE_MBUF_F_TX_IPV4 |
-                                      RTE_MBUF_F_TX_IPV6);
-    const uint64_t all_outer_marks = (RTE_MBUF_F_TX_OUTER_IPV4 |
-                                      RTE_MBUF_F_TX_OUTER_IPV6 |
-                                      RTE_MBUF_F_TX_TUNNEL_MASK);
-    const uint64_t all_marks = all_inner_marks | all_outer_marks;
-
-    if (!(mbuf->ol_flags & all_requests)) {
-        /* No offloads requested, no marks should be set. */
-        mbuf->ol_flags &= ~all_marks;
-
+    if (!(tx_offloads & DP_PACKET_OL_TX_ANY_CKSUM)) {
         uint64_t unexpected = mbuf->ol_flags & RTE_MBUF_F_TX_OFFLOAD_MASK;
         if (OVS_UNLIKELY(unexpected)) {
             VLOG_WARN_RL(&rl, "%s: Unexpected Tx offload flags: %#"PRIx64,
@@ -2661,32 +2647,36 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
         return true;
     }
 
-    const uint64_t tunnel_type = mbuf->ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK;
-    if (OVS_UNLIKELY(tunnel_type &&
-                     tunnel_type != RTE_MBUF_F_TX_TUNNEL_GENEVE &&
-                     tunnel_type != RTE_MBUF_F_TX_TUNNEL_GRE &&
-                     tunnel_type != RTE_MBUF_F_TX_TUNNEL_VXLAN)) {
-        VLOG_WARN_RL(&rl, "%s: Unexpected tunnel type: %#"PRIx64,
-                     netdev_get_name(&dev->up), tunnel_type);
-        netdev_dpdk_mbuf_dump(netdev_get_name(&dev->up),
-                              "Packet with unexpected tunnel type", mbuf);
-        return false;
-    }
-
-    if (tunnel_type && (mbuf->ol_flags & all_inner_requests)) {
-        if (mbuf->ol_flags & all_outer_requests) {
+    if (dp_packet_hwol_is_tunnel(pkt) &&
+        (tx_offloads & DP_PACKET_OL_TX_ANY_INNER)) {
+        if (tx_offloads & ~DP_PACKET_OL_TX_ANY_INNER) {
             mbuf->outer_l2_len = (char *) dp_packet_l3(pkt) -
                                  (char *) dp_packet_eth(pkt);
             mbuf->outer_l3_len = (char *) dp_packet_l4(pkt) -
                                  (char *) dp_packet_l3(pkt);
+
+            /* Outer header checksum offloads. */
+            ol_flags |= dp_packet_hwol_is_outer_ipv4(pkt)
+                ? RTE_MBUF_F_TX_OUTER_IPV4 : RTE_MBUF_F_TX_OUTER_IPV6;
+            if (dp_packet_hwol_is_outer_ipv4_cksum(pkt)) {
+                ol_flags |= RTE_MBUF_F_TX_OUTER_IP_CKSUM;
+            }
+            if (dp_packet_hwol_is_outer_udp_cksum(pkt)) {
+                ol_flags |= RTE_MBUF_F_TX_OUTER_UDP_CKSUM;
+            }
+            if (dp_packet_hwol_is_tunnel_geneve(pkt)) {
+                ol_flags |= RTE_MBUF_F_TX_TUNNEL_GENEVE;
+            } else if (dp_packet_hwol_is_tunnel_gre(pkt)) {
+                ol_flags |= RTE_MBUF_F_TX_TUNNEL_GRE;
+            } else if (dp_packet_hwol_is_tunnel_vxlan(pkt)) {
+                ol_flags |= RTE_MBUF_F_TX_TUNNEL_VXLAN;
+            }
 
             /* Inner L2 length must account for the tunnel header length. */
             l2 = dp_packet_l4(pkt);
             l3 = dp_packet_inner_l3(pkt);
             l4 = dp_packet_inner_l4(pkt);
         } else {
-            /* If no outer offloading is requested, clear outer marks. */
-            mbuf->ol_flags &= ~all_outer_marks;
             mbuf->outer_l2_len = 0;
             mbuf->outer_l3_len = 0;
 
@@ -2695,24 +2685,50 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
             l3 = dp_packet_inner_l3(pkt);
             l4 = dp_packet_inner_l4(pkt);
         }
-    } else {
-        if (tunnel_type) {
-            /* No inner offload is requested, fallback to non tunnel
-             * checksum offloads. */
-            mbuf->ol_flags &= ~all_inner_marks;
-            if (mbuf->ol_flags & RTE_MBUF_F_TX_OUTER_IP_CKSUM) {
-                mbuf->ol_flags |= RTE_MBUF_F_TX_IP_CKSUM;
-                mbuf->ol_flags |= RTE_MBUF_F_TX_IPV4;
-            }
-            if (mbuf->ol_flags & RTE_MBUF_F_TX_OUTER_UDP_CKSUM) {
-                mbuf->ol_flags |= RTE_MBUF_F_TX_UDP_CKSUM;
-                mbuf->ol_flags |= mbuf->ol_flags & RTE_MBUF_F_TX_OUTER_IPV4
-                                  ? RTE_MBUF_F_TX_IPV4 : RTE_MBUF_F_TX_IPV6;
-            }
-            mbuf->ol_flags &= ~(all_outer_requests | all_outer_marks);
+
+        /* Inner header checksum offloads. */
+        ol_flags |= dp_packet_hwol_is_ipv4(pkt)
+            ? RTE_MBUF_F_TX_IPV4 : RTE_MBUF_F_TX_IPV6;
+        if (dp_packet_hwol_tx_ip_csum(pkt)) {
+            ol_flags |= RTE_MBUF_F_TX_IP_CKSUM;
         }
+        if (dp_packet_hwol_l4_is_tcp(pkt)) {
+            ol_flags |= RTE_MBUF_F_TX_TCP_CKSUM;
+        } else if (dp_packet_hwol_l4_is_udp(pkt)) {
+            ol_flags |= RTE_MBUF_F_TX_UDP_CKSUM;
+        } else if (dp_packet_hwol_l4_is_sctp(pkt)) {
+            ol_flags |= RTE_MBUF_F_TX_SCTP_CKSUM;
+        }
+    } else {
         mbuf->outer_l2_len = 0;
         mbuf->outer_l3_len = 0;
+
+        if (dp_packet_hwol_is_tunnel(pkt)) {
+            /* No inner offload is requested, fallback to non tunnel
+             * checksum offloads. */
+            ol_flags |= dp_packet_hwol_is_outer_ipv4(pkt)
+                ? RTE_MBUF_F_TX_IPV4 : RTE_MBUF_F_TX_IPV6;
+            if (dp_packet_hwol_is_outer_ipv4_cksum(pkt)) {
+                ol_flags |= RTE_MBUF_F_TX_IP_CKSUM;
+            }
+            if (dp_packet_hwol_is_outer_udp_cksum(pkt)) {
+                ol_flags |= RTE_MBUF_F_TX_UDP_CKSUM;
+            }
+        } else {
+            ol_flags |= dp_packet_hwol_is_ipv4(pkt)
+                ? RTE_MBUF_F_TX_IPV4 : RTE_MBUF_F_TX_IPV6;
+            if (dp_packet_hwol_tx_ip_csum(pkt)) {
+                ol_flags |= RTE_MBUF_F_TX_IP_CKSUM;
+            }
+            if (dp_packet_hwol_l4_is_tcp(pkt)) {
+                ol_flags |= RTE_MBUF_F_TX_TCP_CKSUM;
+            } else if (dp_packet_hwol_l4_is_udp(pkt)) {
+                ol_flags |= RTE_MBUF_F_TX_UDP_CKSUM;
+            } else if (dp_packet_hwol_l4_is_sctp(pkt)) {
+                ol_flags |= RTE_MBUF_F_TX_SCTP_CKSUM;
+            }
+
+        }
 
         l2 = dp_packet_eth(pkt);
         l3 = dp_packet_l3(pkt);
@@ -2724,13 +2740,14 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
     mbuf->l2_len = (char *) l3 - (char *) l2;
     mbuf->l3_len = (char *) l4 - (char *) l3;
 
-    if (mbuf->ol_flags & RTE_MBUF_F_TX_TCP_SEG) {
+    if (dp_packet_hwol_is_tso(pkt)) {
         struct tcp_header *th = l4;
         uint16_t link_tso_segsz;
         int hdr_len;
 
+        ol_flags |= RTE_MBUF_F_TX_TCP_SEG;
         mbuf->l4_len = TCP_OFFSET(th->tcp_ctl) * 4;
-        if (tunnel_type) {
+        if (dp_packet_hwol_is_tunnel(pkt)) {
             link_tso_segsz = dev->mtu - mbuf->l2_len - mbuf->l3_len -
                              mbuf->l4_len - mbuf->outer_l3_len;
         } else {
@@ -2752,10 +2769,11 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
     }
 
     /* If L4 checksum is requested, IPv4 should be requested as well. */
-    if (mbuf->ol_flags & RTE_MBUF_F_TX_L4_MASK
-        && mbuf->ol_flags & RTE_MBUF_F_TX_IPV4) {
-        mbuf->ol_flags |= RTE_MBUF_F_TX_IP_CKSUM;
+    if (ol_flags & RTE_MBUF_F_TX_L4_MASK && ol_flags & RTE_MBUF_F_TX_IPV4) {
+        ol_flags |= RTE_MBUF_F_TX_IP_CKSUM;
     }
+
+    mbuf->ol_flags |= ol_flags;
 
     return true;
 }
@@ -2931,6 +2949,7 @@ netdev_dpdk_vhost_rxq_recv(struct netdev_rxq *rxq,
     uint16_t qos_drops = 0;
     int qid = rxq->queue_id * VIRTIO_QNUM + VIRTIO_TXQ;
     int vid = netdev_dpdk_get_vid(dev);
+    struct dp_packet *packet;
 
     if (OVS_UNLIKELY(vid < 0 || !dev->vhost_reconfigured
                      || !(dev->flags & NETDEV_UP))) {
@@ -2971,6 +2990,39 @@ netdev_dpdk_vhost_rxq_recv(struct netdev_rxq *rxq,
 
     batch->count = nb_rx;
     dp_packet_batch_init_packet_fields(batch);
+
+    DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
+        if (OVS_LIKELY(!(packet->mbuf.ol_flags
+                         & RTE_MBUF_F_TX_OFFLOAD_MASK))) {
+            continue;
+        }
+        if (packet->mbuf.ol_flags & RTE_MBUF_F_TX_TCP_SEG) {
+            if (userspace_tso_enabled()) {
+                dp_packet_hwol_set_tcp_seg(packet);
+            } else {
+                VLOG_WARN_RL(&rl, "%s: received a TSO request.",
+                             dev->up.name);
+            }
+            continue;
+        }
+        switch (packet->mbuf.ol_flags & RTE_MBUF_F_TX_L4_MASK) {
+        case RTE_MBUF_F_TX_SCTP_CKSUM:
+            dp_packet_hwol_add_tx_offloads(packet,
+                                           DP_PACKET_OL_TX_SCTP_CKSUM);
+            break;
+        case RTE_MBUF_F_TX_TCP_CKSUM:
+            dp_packet_hwol_add_tx_offloads(packet,
+                                           DP_PACKET_OL_TX_TCP_CKSUM);
+            break;
+        case RTE_MBUF_F_TX_UDP_CKSUM:
+            dp_packet_hwol_add_tx_offloads(packet,
+                                           DP_PACKET_OL_TX_UDP_CKSUM);
+            break;
+        }
+        /* Flush out any other Tx offloads.
+         * netdev_dpdk_prep_hwol_packet() will fill it on the Tx path. */
+        packet->mbuf.ol_flags &= ~RTE_MBUF_F_TX_OFFLOAD_MASK;
+    }
 
     return 0;
 }

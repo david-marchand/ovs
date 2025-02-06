@@ -59,6 +59,7 @@ dp_packet_gso_seg_new(const struct dp_packet *p, size_t hdr_len,
      * buffer and indirect buffer flags. */
     *dp_packet_ol_flags_ptr(seg) = *dp_packet_ol_flags_ptr(p)
         & DP_PACKET_OL_SUPPORTED_MASK;
+    dp_packet_hwol_add_tx_offloads(seg, dp_packet_hwol_tx_offloads(p));
 
     dp_packet_hwol_reset_tcp_seg(seg);
 

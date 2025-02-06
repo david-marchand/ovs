@@ -72,43 +72,39 @@ enum dp_packet_offload_mask {
     /* Valid IP checksum in the packet. */
     DEF_OL_FLAG(DP_PACKET_OL_RX_IP_CKSUM_GOOD, RTE_MBUF_F_RX_IP_CKSUM_GOOD,
                 0x20),
-    /* TCP Segmentation Offload. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_TCP_SEG, RTE_MBUF_F_TX_TCP_SEG, 0x40),
-    /* Offloaded packet is IPv4. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_IPV4, RTE_MBUF_F_TX_IPV4, 0x80),
-    /* Offloaded packet is IPv6. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_IPV6, RTE_MBUF_F_TX_IPV6, 0x100),
-    /* Offload TCP checksum. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_TCP_CKSUM, RTE_MBUF_F_TX_TCP_CKSUM, 0x200),
-    /* Offload UDP checksum. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_UDP_CKSUM, RTE_MBUF_F_TX_UDP_CKSUM, 0x400),
-    /* Offload SCTP checksum. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_SCTP_CKSUM, RTE_MBUF_F_TX_SCTP_CKSUM, 0x800),
-    /* Offload IP checksum. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_IP_CKSUM, RTE_MBUF_F_TX_IP_CKSUM, 0x1000),
-    /* Offload packet is tunnel GENEVE. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_TUNNEL_GENEVE,
-                RTE_MBUF_F_TX_TUNNEL_GENEVE, 0x2000),
-    /* Offload packet is tunnel VXLAN. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_TUNNEL_VXLAN,
-                RTE_MBUF_F_TX_TUNNEL_VXLAN, 0x4000),
-    /* Offload tunnel packet, outer header is IPv4. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_OUTER_IPV4,
-                RTE_MBUF_F_TX_OUTER_IPV4, 0x8000),
-    /* Offload tunnel outer IPv4 checksum. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_OUTER_IP_CKSUM,
-                RTE_MBUF_F_TX_OUTER_IP_CKSUM, 0x10000),
-    /* Offload tunnel outer UDP checksum. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_OUTER_UDP_CKSUM,
-                RTE_MBUF_F_TX_OUTER_UDP_CKSUM, 0x20000),
-    /* Offload tunnel packet, outer header is IPv6. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_OUTER_IPV6,
-                RTE_MBUF_F_TX_OUTER_IPV6, 0x40000),
-    /* Offload packet is GRE tunnel. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_TUNNEL_GRE,
-                RTE_MBUF_F_TX_TUNNEL_GRE, 0x80000),
-
     /* Adding new field requires adding to DP_PACKET_OL_SUPPORTED_MASK. */
+};
+
+/* Bit masks for the 'tx_offloads' member of the 'dp_packet' structure. */
+enum dp_packet_tx_offload_mask {
+    /* TCP Segmentation Offload. */
+    DP_PACKET_OL_TX_TCP_SEG = 0x1,
+    /* Offloaded packet is IPv4. */
+    DP_PACKET_OL_TX_IPV4 = 0x2,
+    /* Offloaded packet is IPv6. */
+    DP_PACKET_OL_TX_IPV6 = 0x4,
+    /* Offload TCP checksum. */
+    DP_PACKET_OL_TX_TCP_CKSUM = 0x8,
+    /* Offload UDP checksum. */
+    DP_PACKET_OL_TX_UDP_CKSUM = 0x10,
+    /* Offload SCTP checksum. */
+    DP_PACKET_OL_TX_SCTP_CKSUM = 0x18,
+    /* Offload IP checksum. */
+    DP_PACKET_OL_TX_IP_CKSUM = 0x20,
+    /* Offload packet is tunnel GENEVE. */
+    DP_PACKET_OL_TX_TUNNEL_GENEVE = 0x40,
+    /* Offload packet is tunnel VXLAN. */
+    DP_PACKET_OL_TX_TUNNEL_VXLAN = 0x80,
+    /* Offload tunnel packet, outer header is IPv4. */
+    DP_PACKET_OL_TX_OUTER_IPV4 = 0x100,
+    /* Offload tunnel outer IPv4 checksum. */
+    DP_PACKET_OL_TX_OUTER_IP_CKSUM = 0x200,
+    /* Offload tunnel outer UDP checksum. */
+    DP_PACKET_OL_TX_OUTER_UDP_CKSUM = 0x400,
+    /* Offload tunnel packet, outer header is IPv6. */
+    DP_PACKET_OL_TX_OUTER_IPV6 = 0x800,
+    /* Offload packet is GRE tunnel. */
+    DP_PACKET_OL_TX_TUNNEL_GRE = 0x1000,
 };
 
 #define DP_PACKET_OL_SUPPORTED_MASK (DP_PACKET_OL_RSS_HASH           | \
@@ -116,27 +112,14 @@ enum dp_packet_offload_mask {
                                      DP_PACKET_OL_RX_L4_CKSUM_BAD    | \
                                      DP_PACKET_OL_RX_IP_CKSUM_BAD    | \
                                      DP_PACKET_OL_RX_L4_CKSUM_GOOD   | \
-                                     DP_PACKET_OL_RX_IP_CKSUM_GOOD   | \
-                                     DP_PACKET_OL_TX_TCP_SEG         | \
-                                     DP_PACKET_OL_TX_IPV4            | \
-                                     DP_PACKET_OL_TX_IPV6            | \
-                                     DP_PACKET_OL_TX_TCP_CKSUM       | \
-                                     DP_PACKET_OL_TX_UDP_CKSUM       | \
-                                     DP_PACKET_OL_TX_SCTP_CKSUM      | \
-                                     DP_PACKET_OL_TX_IP_CKSUM        | \
-                                     DP_PACKET_OL_TX_TUNNEL_GENEVE   | \
-                                     DP_PACKET_OL_TX_TUNNEL_VXLAN    | \
-                                     DP_PACKET_OL_TX_TUNNEL_GRE      | \
-                                     DP_PACKET_OL_TX_OUTER_IPV4      | \
-                                     DP_PACKET_OL_TX_OUTER_IP_CKSUM  | \
-                                     DP_PACKET_OL_TX_OUTER_UDP_CKSUM | \
-                                     DP_PACKET_OL_TX_OUTER_IPV6)
+                                     DP_PACKET_OL_RX_IP_CKSUM_GOOD)
 
 #define DP_PACKET_OL_TX_L4_MASK (DP_PACKET_OL_TX_TCP_CKSUM | \
                                  DP_PACKET_OL_TX_UDP_CKSUM | \
                                  DP_PACKET_OL_TX_SCTP_CKSUM)
-#define DP_PACKET_OL_TX_ANY_CKSUM (DP_PACKET_OL_TX_L4_MASK | \
-                                   DP_PACKET_OL_TX_IP_CKSUM | \
+#define DP_PACKET_OL_TX_ANY_INNER (DP_PACKET_OL_TX_L4_MASK | \
+                                   DP_PACKET_OL_TX_IP_CKSUM)
+#define DP_PACKET_OL_TX_ANY_CKSUM (DP_PACKET_OL_TX_ANY_INNER | \
                                    DP_PACKET_OL_TX_OUTER_IP_CKSUM | \
                                    DP_PACKET_OL_TX_OUTER_UDP_CKSUM)
 #define DP_PACKET_OL_RX_IP_CKSUM_MASK (DP_PACKET_OL_RX_IP_CKSUM_GOOD | \
@@ -176,6 +159,7 @@ struct dp_packet {
                                     * or UINT16_MAX. */
     uint16_t inner_l4_ofs;         /* Inner Transport-level header offset,
                                       or UINT16_MAX. */
+    uint32_t tx_offloads;          /* Tx offloads. */
     uint32_t cutlen;               /* length in bytes to cut from the end. */
     ovs_be32 packet_type;          /* Packet type as defined in OpenFlow */
     uint16_t csum_start;           /* Position to start checksumming from. */
@@ -1066,6 +1050,7 @@ static inline void
 dp_packet_reset_offload(struct dp_packet *p)
 {
     *dp_packet_ol_flags_ptr(p) &= ~DP_PACKET_OL_SUPPORTED_MASK;
+    p->tx_offloads = 0;
 }
 
 static inline bool
@@ -1086,11 +1071,29 @@ dp_packet_set_flow_mark(struct dp_packet *p, uint32_t mark)
     *dp_packet_ol_flags_ptr(p) |= DP_PACKET_OL_FLOW_MARK;
 }
 
+static inline uint32_t
+dp_packet_hwol_tx_offloads(const struct dp_packet *p)
+{
+    return p->tx_offloads;
+}
+
+static inline void
+dp_packet_hwol_add_tx_offloads(struct dp_packet *p, uint32_t flags)
+{
+    p->tx_offloads |= flags;
+}
+
+static inline void
+dp_packet_hwol_del_tx_offloads(struct dp_packet *p, uint32_t flags)
+{
+    p->tx_offloads &= ~flags;
+}
+
 /* Returns the L4 cksum offload bitmask. */
 static inline uint64_t
 dp_packet_hwol_l4_mask(const struct dp_packet *b)
 {
-    return *dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_L4_MASK;
+    return dp_packet_hwol_tx_offloads(b) & DP_PACKET_OL_TX_L4_MASK;
 }
 
 /* Return true if the packet 'b' requested L4 checksum offload. */
@@ -1104,28 +1107,28 @@ dp_packet_hwol_tx_l4_checksum(const struct dp_packet *b)
 static inline bool
 dp_packet_hwol_is_tso(const struct dp_packet *b)
 {
-    return !!(*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_TCP_SEG);
+    return !!(dp_packet_hwol_tx_offloads(b) & DP_PACKET_OL_TX_TCP_SEG);
 }
 
 /* Returns 'true' if packet 'b' is marked for IPv4 checksum offloading. */
 static inline bool
 dp_packet_hwol_is_ipv4(const struct dp_packet *b)
 {
-    return !!(*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_IPV4);
+    return !!(dp_packet_hwol_tx_offloads(b) & DP_PACKET_OL_TX_IPV4);
 }
 
 /* Returns 'true' if packet 'p' is marked as IPv6. */
 static inline bool
 dp_packet_hwol_tx_ipv6(const struct dp_packet *p)
 {
-    return !!(*dp_packet_ol_flags_ptr(p) & DP_PACKET_OL_TX_IPV6);
+    return !!(dp_packet_hwol_tx_offloads(p) & DP_PACKET_OL_TX_IPV6);
 }
 
 /* Returns 'true' if packet 'b' is marked for TCP checksum offloading. */
 static inline bool
 dp_packet_hwol_l4_is_tcp(const struct dp_packet *b)
 {
-    return (*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_L4_MASK) ==
+    return (dp_packet_hwol_tx_offloads(b) & DP_PACKET_OL_TX_L4_MASK) ==
             DP_PACKET_OL_TX_TCP_CKSUM;
 }
 
@@ -1133,7 +1136,7 @@ dp_packet_hwol_l4_is_tcp(const struct dp_packet *b)
 static inline bool
 dp_packet_hwol_l4_is_udp(struct dp_packet *b)
 {
-    return (*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_L4_MASK) ==
+    return (dp_packet_hwol_tx_offloads(b) & DP_PACKET_OL_TX_L4_MASK) ==
             DP_PACKET_OL_TX_UDP_CKSUM;
 }
 
@@ -1141,7 +1144,7 @@ dp_packet_hwol_l4_is_udp(struct dp_packet *b)
 static inline bool
 dp_packet_hwol_l4_is_sctp(struct dp_packet *b)
 {
-    return (*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_L4_MASK) ==
+    return (dp_packet_hwol_tx_offloads(b) & DP_PACKET_OL_TX_L4_MASK) ==
             DP_PACKET_OL_TX_SCTP_CKSUM;
 }
 
@@ -1149,14 +1152,14 @@ dp_packet_hwol_l4_is_sctp(struct dp_packet *b)
 static inline bool
 dp_packet_hwol_is_outer_ipv6(const struct dp_packet *b)
 {
-    return *dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_OUTER_IPV6;
+    return dp_packet_hwol_tx_offloads(b) & DP_PACKET_OL_TX_OUTER_IPV6;
 }
 
 /* Returns 'true' if packet 'b' is marked as having an outer IPv4 header. */
 static inline bool
 dp_packet_hwol_is_outer_ipv4(const struct dp_packet *b)
 {
-    return *dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_OUTER_IPV4;
+    return dp_packet_hwol_tx_offloads(b) & DP_PACKET_OL_TX_OUTER_IPV4;
 }
 
 /* Returns 'true' if packet 'b' is marked for tunnel GENEVE
@@ -1164,7 +1167,7 @@ dp_packet_hwol_is_outer_ipv4(const struct dp_packet *b)
 static inline bool
 dp_packet_hwol_is_tunnel_geneve(struct dp_packet *b)
 {
-    return !!(*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_TUNNEL_GENEVE);
+    return !!(dp_packet_hwol_tx_offloads(b) & DP_PACKET_OL_TX_TUNNEL_GENEVE);
 }
 
 /* Returns 'true' if packet 'b' is marked for tunnel VXLAN
@@ -1172,94 +1175,94 @@ dp_packet_hwol_is_tunnel_geneve(struct dp_packet *b)
 static inline bool
 dp_packet_hwol_is_tunnel_vxlan(struct dp_packet *b)
 {
-    return !!(*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_TUNNEL_VXLAN);
+    return !!(dp_packet_hwol_tx_offloads(b) & DP_PACKET_OL_TX_TUNNEL_VXLAN);
 }
 
 /* Returns 'true' if packet 'b' is marked for GRE tunnel offloading. */
 static inline bool
 dp_packet_hwol_is_tunnel_gre(struct dp_packet *b)
 {
-    return !!(*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_TUNNEL_GRE);
+    return !!(dp_packet_hwol_tx_offloads(b) & DP_PACKET_OL_TX_TUNNEL_GRE);
 }
 
 /* Returns true if packet 'b' has any offloadable tunnel type. */
 static inline bool
 dp_packet_hwol_is_tunnel(struct dp_packet *b)
 {
-    return !!(*dp_packet_ol_flags_ptr(b) & (DP_PACKET_OL_TX_TUNNEL_VXLAN |
-                                            DP_PACKET_OL_TX_TUNNEL_GRE |
-                                            DP_PACKET_OL_TX_TUNNEL_GENEVE));
+    return !!(dp_packet_hwol_tx_offloads(b) & (DP_PACKET_OL_TX_TUNNEL_VXLAN |
+                                               DP_PACKET_OL_TX_TUNNEL_GRE |
+                                               DP_PACKET_OL_TX_TUNNEL_GENEVE));
 }
 
 /* Returns 'true' if packet 'b' is marked for outer IPv4 checksum offload. */
 static inline bool
 dp_packet_hwol_is_outer_ipv4_cksum(const struct dp_packet *b)
 {
-    return !!(*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_OUTER_IP_CKSUM);
+    return !!(dp_packet_hwol_tx_offloads(b) & DP_PACKET_OL_TX_OUTER_IP_CKSUM);
 }
 
 /* Returns 'true' if packet 'b' is marked for outer UDP checksum offload. */
 static inline bool
 dp_packet_hwol_is_outer_udp_cksum(struct dp_packet *b)
 {
-    return !!(*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_OUTER_UDP_CKSUM);
+    return !!(dp_packet_hwol_tx_offloads(b) & DP_PACKET_OL_TX_OUTER_UDP_CKSUM);
 }
 
 /* Returns 'true' if packet 'b' is marked for any checksum offload. */
 static inline bool
 dp_packet_hwol_tx_is_any_csum(struct dp_packet *b)
 {
-    return !!(*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_ANY_CKSUM);
+    return !!(dp_packet_hwol_tx_offloads(b) & DP_PACKET_OL_TX_ANY_CKSUM);
 }
 
 static inline void
 dp_packet_hwol_reset_tx_l4_csum(struct dp_packet *p)
 {
-    *dp_packet_ol_flags_ptr(p) &= ~DP_PACKET_OL_TX_L4_MASK;
+    dp_packet_hwol_del_tx_offloads(p, DP_PACKET_OL_TX_L4_MASK);
 }
 
 /* Mark packet 'p' as IPv4. */
 static inline void
 dp_packet_hwol_set_tx_ipv4(struct dp_packet *p)
 {
-    *dp_packet_ol_flags_ptr(p) &= ~DP_PACKET_OL_TX_IPV6;
-    *dp_packet_ol_flags_ptr(p) |= DP_PACKET_OL_TX_IPV4;
+    dp_packet_hwol_del_tx_offloads(p, DP_PACKET_OL_TX_IPV6);
+    dp_packet_hwol_add_tx_offloads(p, DP_PACKET_OL_TX_IPV4);
 }
 
 /* Mark packet 'a' as IPv6. */
 static inline void
 dp_packet_hwol_set_tx_ipv6(struct dp_packet *a)
 {
-    *dp_packet_ol_flags_ptr(a) &= ~DP_PACKET_OL_TX_IPV4;
-    *dp_packet_ol_flags_ptr(a) |= DP_PACKET_OL_TX_IPV6;
+    dp_packet_hwol_del_tx_offloads(a, DP_PACKET_OL_TX_IPV4);
+    dp_packet_hwol_add_tx_offloads(a, DP_PACKET_OL_TX_IPV6);
 }
 
 /* Mark packet 'a' as a tunnel packet with outer IPv6 header. */
 static inline void
 dp_packet_hwol_set_tx_outer_ipv6(struct dp_packet *a)
 {
-    *dp_packet_ol_flags_ptr(a) &= ~DP_PACKET_OL_TX_OUTER_IPV4;
-    *dp_packet_ol_flags_ptr(a) |= DP_PACKET_OL_TX_OUTER_IPV6;
+    dp_packet_hwol_del_tx_offloads(a, DP_PACKET_OL_TX_OUTER_IPV4);
+    dp_packet_hwol_add_tx_offloads(a, DP_PACKET_OL_TX_OUTER_IPV6);
 }
 
 /* Returns 'true' if packet 'p' is marked for IPv4 checksum offloading. */
 static inline bool
 dp_packet_hwol_tx_ip_csum(const struct dp_packet *p)
 {
-    return !!(*dp_packet_ol_flags_ptr(p) & DP_PACKET_OL_TX_IP_CKSUM);
+    return !!(dp_packet_hwol_tx_offloads(p) & DP_PACKET_OL_TX_IP_CKSUM);
 }
 
 /* Marks packet 'p' for IPv4 checksum offloading. */
 static inline void
 dp_packet_hwol_set_tx_ip_csum(struct dp_packet *p)
 {
-    *dp_packet_ol_flags_ptr(p) |= DP_PACKET_OL_TX_IP_CKSUM;
+    dp_packet_hwol_add_tx_offloads(p, DP_PACKET_OL_TX_IP_CKSUM);
 }
 
 static inline void
 dp_packet_hwol_reset_tx_ip_csum(struct dp_packet *p)
 {
-    *dp_packet_ol_flags_ptr(p) &= ~DP_PACKET_OL_TX_IP_CKSUM;
+    dp_packet_hwol_del_tx_offloads(p, DP_PACKET_OL_TX_IP_CKSUM);
 }
 
 /* Mark packet 'b' for TCP checksum offloading.  It implies that either
@@ -1267,7 +1270,7 @@ dp_packet_hwol_reset_tx_ip_csum(struct dp_packet *p)
 static inline void
 dp_packet_hwol_set_csum_tcp(struct dp_packet *b)
 {
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_TCP_CKSUM;
+    dp_packet_hwol_add_tx_offloads(b, DP_PACKET_OL_TX_TCP_CKSUM);
 }
 
 /* Mark packet 'b' for UDP checksum offloading.  It implies that either
@@ -1275,7 +1278,7 @@ dp_packet_hwol_set_csum_tcp(struct dp_packet *b)
 static inline void
 dp_packet_hwol_set_csum_udp(struct dp_packet *b)
 {
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_UDP_CKSUM;
+    dp_packet_hwol_add_tx_offloads(b, DP_PACKET_OL_TX_UDP_CKSUM);
 }
 
 /* Mark packet 'b' for SCTP checksum offloading.  It implies that either
@@ -1283,7 +1286,7 @@ dp_packet_hwol_set_csum_udp(struct dp_packet *b)
 static inline void
 dp_packet_hwol_set_csum_sctp(struct dp_packet *b)
 {
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_SCTP_CKSUM;
+    dp_packet_hwol_add_tx_offloads(b, DP_PACKET_OL_TX_SCTP_CKSUM);
 }
 
 /* Mark packet 'b' for TCP segmentation offloading.  It implies that
@@ -1292,70 +1295,70 @@ dp_packet_hwol_set_csum_sctp(struct dp_packet *b)
 static inline void
 dp_packet_hwol_set_tcp_seg(struct dp_packet *b)
 {
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_TCP_SEG;
+    dp_packet_hwol_add_tx_offloads(b, DP_PACKET_OL_TX_TCP_SEG);
 }
 
 /* Mark packet 'b' for tunnel GENEVE offloading. */
 static inline void
 dp_packet_hwol_set_tunnel_geneve(struct dp_packet *b)
 {
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_TUNNEL_GENEVE;
+    dp_packet_hwol_add_tx_offloads(b, DP_PACKET_OL_TX_TUNNEL_GENEVE);
 }
 
 /* Mark packet 'b' for tunnel VXLAN offloading. */
 static inline void
 dp_packet_hwol_set_tunnel_vxlan(struct dp_packet *b)
 {
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_TUNNEL_VXLAN;
+    dp_packet_hwol_add_tx_offloads(b, DP_PACKET_OL_TX_TUNNEL_VXLAN);
 }
 
 /* Mark packet 'b' for GRE tunnel offloading. */
 static inline void
 dp_packet_hwol_set_tunnel_gre(struct dp_packet *b)
 {
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_TUNNEL_GRE;
+    dp_packet_hwol_add_tx_offloads(b, DP_PACKET_OL_TX_TUNNEL_GRE);
 }
 
 /* Clears tunnel offloading marks. */
 static inline void
 dp_packet_hwol_reset_tunnel(struct dp_packet *b)
 {
-    *dp_packet_ol_flags_ptr(b) &= ~(DP_PACKET_OL_TX_TUNNEL_VXLAN |
-                                    DP_PACKET_OL_TX_TUNNEL_GRE |
-                                    DP_PACKET_OL_TX_TUNNEL_GENEVE);
+    dp_packet_hwol_del_tx_offloads(b, DP_PACKET_OL_TX_TUNNEL_VXLAN |
+                                      DP_PACKET_OL_TX_TUNNEL_GRE |
+                                      DP_PACKET_OL_TX_TUNNEL_GENEVE);
 }
 
 /* Mark packet 'b' as a tunnel packet with outer IPv4 header. */
 static inline void
 dp_packet_hwol_set_tx_outer_ipv4(struct dp_packet *b)
 {
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_OUTER_IPV4;
+    dp_packet_hwol_add_tx_offloads(b, DP_PACKET_OL_TX_OUTER_IPV4);
 }
 
 /* Mark packet 'b' for csum offloading in outer IPv4 header. */
 static inline void
 dp_packet_hwol_set_tx_outer_ipv4_csum(struct dp_packet *b)
 {
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_OUTER_IP_CKSUM;
+    dp_packet_hwol_add_tx_offloads(b, DP_PACKET_OL_TX_OUTER_IP_CKSUM);
 }
 
 static inline void
 dp_packet_hwol_reset_outer_ipv4_csum(struct dp_packet *p)
 {
-    *dp_packet_ol_flags_ptr(p) &= ~DP_PACKET_OL_TX_OUTER_IP_CKSUM;
+    dp_packet_hwol_del_tx_offloads(p, DP_PACKET_OL_TX_OUTER_IP_CKSUM);
 }
 
 static inline void
 dp_packet_hwol_reset_outer_udp_csum(struct dp_packet *p)
 {
-    *dp_packet_ol_flags_ptr(p) &= ~DP_PACKET_OL_TX_OUTER_UDP_CKSUM;
+    dp_packet_hwol_del_tx_offloads(p, DP_PACKET_OL_TX_OUTER_UDP_CKSUM);
 }
 
 /* Mark packet 'b' for csum offloading in outer UDP header. */
 static inline void
 dp_packet_hwol_set_outer_udp_csum(struct dp_packet *b)
 {
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_OUTER_UDP_CKSUM;
+    dp_packet_hwol_add_tx_offloads(b, DP_PACKET_OL_TX_OUTER_UDP_CKSUM);
 }
 
 /* Resets TCP Segmentation in packet 'p' and adjust flags to indicate
@@ -1363,29 +1366,31 @@ dp_packet_hwol_set_outer_udp_csum(struct dp_packet *b)
 static inline void
 dp_packet_hwol_reset_tcp_seg(struct dp_packet *p)
 {
-    uint64_t ol_flags = *dp_packet_ol_flags_ptr(p)
-                        | DP_PACKET_OL_TX_TCP_CKSUM;
+    uint32_t tx_offloads;
 
-    ol_flags = ol_flags & ~(DP_PACKET_OL_TX_TCP_SEG
-                            | DP_PACKET_OL_RX_L4_CKSUM_GOOD
-                            | DP_PACKET_OL_RX_IP_CKSUM_GOOD);
+    *dp_packet_ol_flags_ptr(p) &= ~(DP_PACKET_OL_RX_L4_CKSUM_GOOD
+                                    | DP_PACKET_OL_RX_IP_CKSUM_GOOD);
 
-    if (ol_flags & DP_PACKET_OL_TX_IPV4) {
-        ol_flags |= DP_PACKET_OL_TX_IP_CKSUM;
+    tx_offloads = dp_packet_hwol_tx_offloads(p);
+    tx_offloads |= DP_PACKET_OL_TX_TCP_CKSUM;
+
+    if (tx_offloads & DP_PACKET_OL_TX_IPV4) {
+        tx_offloads |= DP_PACKET_OL_TX_IP_CKSUM;
     }
 
-    if (ol_flags & (DP_PACKET_OL_TX_TUNNEL_VXLAN |
-                    DP_PACKET_OL_TX_TUNNEL_GENEVE)) {
-        if (ol_flags & DP_PACKET_OL_TX_OUTER_IPV4) {
-            ol_flags |= DP_PACKET_OL_TX_OUTER_IP_CKSUM;
+    if (tx_offloads & (DP_PACKET_OL_TX_TUNNEL_VXLAN |
+                       DP_PACKET_OL_TX_TUNNEL_GENEVE)) {
+        if (tx_offloads & DP_PACKET_OL_TX_OUTER_IPV4) {
+            tx_offloads |= DP_PACKET_OL_TX_OUTER_IP_CKSUM;
         }
-        ol_flags |= DP_PACKET_OL_TX_OUTER_UDP_CKSUM;
-    } else if (ol_flags & DP_PACKET_OL_TX_TUNNEL_GRE &&
-               ol_flags & DP_PACKET_OL_TX_OUTER_IPV4) {
-        ol_flags |= DP_PACKET_OL_TX_OUTER_IP_CKSUM;
+        tx_offloads |= DP_PACKET_OL_TX_OUTER_UDP_CKSUM;
+    } else if (tx_offloads & DP_PACKET_OL_TX_TUNNEL_GRE &&
+               tx_offloads & DP_PACKET_OL_TX_OUTER_IPV4) {
+        tx_offloads |= DP_PACKET_OL_TX_OUTER_IP_CKSUM;
     }
 
-    *dp_packet_ol_flags_ptr(p) = ol_flags;
+    dp_packet_hwol_del_tx_offloads(p, DP_PACKET_OL_TX_TCP_SEG);
+    dp_packet_hwol_add_tx_offloads(p, tx_offloads);
 }
 
 /* Returns 'true' if the IP header has good integrity and the
