@@ -72,8 +72,6 @@ enum dp_packet_offload_mask {
     /* Valid IP checksum in the packet. */
     DEF_OL_FLAG(DP_PACKET_OL_RX_IP_CKSUM_GOOD, RTE_MBUF_F_RX_IP_CKSUM_GOOD,
                 0x20),
-    /* TCP Segmentation Offload. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_TCP_SEG, RTE_MBUF_F_TX_TCP_SEG, 0x40),
 
     /* Adding new field requires adding to DP_PACKET_OL_SUPPORTED_MASK. */
 };
@@ -83,8 +81,7 @@ enum dp_packet_offload_mask {
                                      DP_PACKET_OL_RX_L4_CKSUM_BAD    | \
                                      DP_PACKET_OL_RX_IP_CKSUM_BAD    | \
                                      DP_PACKET_OL_RX_L4_CKSUM_GOOD   | \
-                                     DP_PACKET_OL_RX_IP_CKSUM_GOOD   | \
-                                     DP_PACKET_OL_TX_TCP_SEG)
+                                     DP_PACKET_OL_RX_IP_CKSUM_GOOD)
 
 #define DP_PACKET_OL_RX_IP_CKSUM_MASK (DP_PACKET_OL_RX_IP_CKSUM_GOOD | \
                                        DP_PACKET_OL_RX_IP_CKSUM_BAD)
@@ -1072,22 +1069,6 @@ dp_packet_set_flow_mark(struct dp_packet *p, uint32_t mark)
 {
     *dp_packet_flow_mark_ptr(p) = mark;
     *dp_packet_ol_flags_ptr(p) |= DP_PACKET_OL_FLOW_MARK;
-}
-
-/* Returns 'true' if packet 'b' is marked for TCP segmentation offloading. */
-static inline bool
-dp_packet_hwol_is_tso(const struct dp_packet *b)
-{
-    return !!(*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_TCP_SEG);
-}
-
-/* Mark packet 'b' for TCP segmentation offloading.  It implies that
- * either the packet 'b' is marked for IPv4 or IPv6 checksum offloading
- * and also for TCP checksum offloading. */
-static inline void
-dp_packet_hwol_set_tcp_seg(struct dp_packet *b)
-{
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_TCP_SEG;
 }
 
 /* Returns 'true' if the IP header has good integrity and the

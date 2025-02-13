@@ -63,7 +63,7 @@ dp_packet_gso_seg_new(const struct dp_packet *p, size_t hdr_len,
 
     /* Resets TCP Segmentation in packet 'p' and adjust flags to indicate
      * L3 and L4 checksumming is now required. */
-    *dp_packet_ol_flags_ptr(seg) &= ~DP_PACKET_OL_TX_TCP_SEG;
+    dp_packet_set_tso_segsz(seg, 0);
 
     return seg;
 }

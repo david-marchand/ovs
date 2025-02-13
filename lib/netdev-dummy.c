@@ -1153,7 +1153,6 @@ netdev_dummy_rxq_recv(struct netdev_rxq *rxq_, struct dp_packet_batch *batch,
 
         if (proto == IPPROTO_TCP && netdev->ol_tso_segsz) {
             dp_packet_set_tso_segsz(packet, netdev->ol_tso_segsz);
-            dp_packet_hwol_set_tcp_seg(packet);
         }
     }
 
@@ -1216,7 +1215,7 @@ netdev_dummy_send(struct netdev *netdev, int qid,
 
         ovs_mutex_lock(&dev->mutex);
         is_tso = userspace_tso_enabled() && dev->ol_tso_segsz &&
-                 dp_packet_hwol_is_tso(packet);
+                 dp_packet_get_tso_segsz(packet);
         ovs_mutex_unlock(&dev->mutex);
 
         if (!dp_packet_is_eth(packet)) {
