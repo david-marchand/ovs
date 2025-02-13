@@ -6387,6 +6387,11 @@ netdev_dpdk_vhost_client_reconfigure(struct netdev *netdev)
             vhost_flags |= RTE_VHOST_USER_POSTCOPY_SUPPORT;
         }
 
+        /* Prefer that the vhost library provides Rx ol_flags, rather than let
+         * it mark the packet with Tx ol_flags (which may collide with OVS Tx
+         * offloads decisions). */
+        vhost_flags |= RTE_VHOST_USER_NET_COMPLIANT_OL_FLAGS;
+
         /* Enable External Buffers if TCP Segmentation Offload is enabled. */
         if (enable_tso) {
             vhost_flags |= RTE_VHOST_USER_EXTBUF_SUPPORT;
