@@ -2634,8 +2634,7 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
     void *l4;
 
     const uint64_t all_inner_requests = (RTE_MBUF_F_TX_IP_CKSUM |
-                                         RTE_MBUF_F_TX_L4_MASK |
-                                         RTE_MBUF_F_TX_TCP_SEG);
+                                         RTE_MBUF_F_TX_L4_MASK);
     const uint64_t all_outer_requests = (RTE_MBUF_F_TX_OUTER_IP_CKSUM |
                                          RTE_MBUF_F_TX_OUTER_UDP_CKSUM);
     const uint64_t all_requests = all_inner_requests | all_outer_requests;
@@ -2645,6 +2644,10 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
                                       RTE_MBUF_F_TX_OUTER_IPV6 |
                                       RTE_MBUF_F_TX_TUNNEL_MASK);
     const uint64_t all_marks = all_inner_marks | all_outer_marks;
+
+    if (mbuf->tso_segsz != 0) {
+        mbuf->ol_flags |= RTE_MBUF_F_TX_TCP_SEG;
+    }
 
     if (!(mbuf->ol_flags & all_requests)) {
         /* No offloads requested, no marks should be set. */
@@ -3062,7 +3065,7 @@ netdev_dpdk_filter_packet_len(struct netdev_dpdk *dev, struct rte_mbuf **pkts,
     for (i = 0; i < pkt_cnt; i++) {
         pkt = pkts[i];
         if (OVS_UNLIKELY((pkt->pkt_len > dev->max_packet_len)
-            && !(pkt->ol_flags & RTE_MBUF_F_TX_TCP_SEG))) {
+            && !(pkt->tso_segsz != 0))) {
             VLOG_WARN_RL(&rl, "%s: Too big size %" PRIu32 " "
                          "max_packet_len %d", dev->up.name, pkt->pkt_len,
                          dev->max_packet_len);

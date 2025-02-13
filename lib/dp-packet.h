@@ -72,8 +72,6 @@ enum dp_packet_offload_mask {
     /* Valid IP checksum in the packet. */
     DEF_OL_FLAG(DP_PACKET_OL_RX_IP_CKSUM_GOOD, RTE_MBUF_F_RX_IP_CKSUM_GOOD,
                 0x20),
-    /* TCP Segmentation Offload. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_TCP_SEG, RTE_MBUF_F_TX_TCP_SEG, 0x40),
     /* Offloaded packet is IPv4. */
     DEF_OL_FLAG(DP_PACKET_OL_TX_IPV4, RTE_MBUF_F_TX_IPV4, 0x80),
     /* Offloaded packet is IPv6. */
@@ -117,7 +115,6 @@ enum dp_packet_offload_mask {
                                      DP_PACKET_OL_RX_IP_CKSUM_BAD    | \
                                      DP_PACKET_OL_RX_L4_CKSUM_GOOD   | \
                                      DP_PACKET_OL_RX_IP_CKSUM_GOOD   | \
-                                     DP_PACKET_OL_TX_TCP_SEG         | \
                                      DP_PACKET_OL_TX_IPV4            | \
                                      DP_PACKET_OL_TX_IPV6            | \
                                      DP_PACKET_OL_TX_TCP_CKSUM       | \
@@ -1112,7 +1109,7 @@ dp_packet_hwol_tx_l4_checksum(const struct dp_packet *b)
 static inline bool
 dp_packet_hwol_is_tso(const struct dp_packet *b)
 {
-    return !!(*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_TCP_SEG);
+    return !!dp_packet_get_tso_segsz(b);
 }
 
 /* Returns 'true' if packet 'b' is marked for IPv4 checksum offloading. */
@@ -1294,15 +1291,6 @@ dp_packet_hwol_set_csum_sctp(struct dp_packet *b)
     *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_SCTP_CKSUM;
 }
 
-/* Mark packet 'b' for TCP segmentation offloading.  It implies that
- * either the packet 'b' is marked for IPv4 or IPv6 checksum offloading
- * and also for TCP checksum offloading. */
-static inline void
-dp_packet_hwol_set_tcp_seg(struct dp_packet *b)
-{
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_TCP_SEG;
-}
-
 /* Mark packet 'b' for tunnel GENEVE offloading. */
 static inline void
 dp_packet_hwol_set_tunnel_geneve(struct dp_packet *b)
@@ -1365,8 +1353,9 @@ dp_packet_hwol_reset_tcp_seg(struct dp_packet *p)
     uint64_t ol_flags = *dp_packet_ol_flags_ptr(p)
                         | DP_PACKET_OL_TX_TCP_CKSUM;
 
-    ol_flags = ol_flags & ~(DP_PACKET_OL_TX_TCP_SEG
-                            | DP_PACKET_OL_RX_L4_CKSUM_GOOD
+    dp_packet_set_tso_segsz(p, 0);
+
+    ol_flags = ol_flags & ~(DP_PACKET_OL_RX_L4_CKSUM_GOOD
                             | DP_PACKET_OL_RX_IP_CKSUM_GOOD);
 
     if (ol_flags & DP_PACKET_OL_TX_IPV4) {

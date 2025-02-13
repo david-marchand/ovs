@@ -7130,7 +7130,6 @@ netdev_linux_parse_vnet_hdr(struct dp_packet *b)
     case VIRTIO_NET_HDR_GSO_TCPV4:
     case VIRTIO_NET_HDR_GSO_TCPV6:
         dp_packet_set_tso_segsz(b, (OVS_FORCE uint16_t) vnet->gso_size);
-        dp_packet_hwol_set_tcp_seg(b);
         break;
 
     case VIRTIO_NET_HDR_GSO_UDP:
