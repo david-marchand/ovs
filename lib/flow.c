@@ -949,11 +949,6 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
         nw_proto = nh->ip_proto;
         nw_frag = ipv4_get_nw_frag(nh);
         data_pull(&data, &size, ip_len);
-        if (tunneling) {
-            dp_packet_hwol_set_tx_outer_ipv4(packet);
-        } else {
-            dp_packet_hwol_set_tx_ipv4(packet);
-        }
     } else if (dl_type == htons(ETH_TYPE_IPV6)) {
         const struct ovs_16aligned_ip6_hdr *nh = data;
         ovs_be32 tc_flow;
@@ -966,12 +961,6 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
             goto out;
         }
         data_pull(&data, &size, sizeof *nh);
-
-        if (tunneling) {
-            dp_packet_hwol_set_tx_outer_ipv6(packet);
-        } else {
-            dp_packet_hwol_set_tx_ipv6(packet);
-        }
         plen = ntohs(nh->ip6_plen);
         dp_packet_set_l2_pad_size(packet, size - plen);
         size = plen;   /* Never pull padding. */

@@ -89,7 +89,3 @@ Rules
    It may be a IPv4 packet, or not. It may have a valid IPv4 cheksum, or not.
    This situation is encountered with virtual drivers that provide no
    information about the IP header, and for IPv6 packets.
-
-7) Packet with flag ``DP_PACKET_OL_TX_IPV4`` is an IPv4 packet.
-
-8) Packet with flag ``DP_PACKET_OL_TX_IPV6`` is an IPv6 packet.

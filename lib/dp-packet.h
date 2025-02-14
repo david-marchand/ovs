@@ -74,25 +74,15 @@ enum dp_packet_offload_mask {
                 0x20),
     /* TCP Segmentation Offload. */
     DEF_OL_FLAG(DP_PACKET_OL_TX_TCP_SEG, RTE_MBUF_F_TX_TCP_SEG, 0x40),
-    /* Offloaded packet is IPv4. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_IPV4, RTE_MBUF_F_TX_IPV4, 0x80),
-    /* Offloaded packet is IPv6. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_IPV6, RTE_MBUF_F_TX_IPV6, 0x100),
     /* Offload TCP checksum. */
     DEF_OL_FLAG(DP_PACKET_OL_TX_TCP_CKSUM, RTE_MBUF_F_TX_TCP_CKSUM, 0x200),
     /* Offload UDP checksum. */
     DEF_OL_FLAG(DP_PACKET_OL_TX_UDP_CKSUM, RTE_MBUF_F_TX_UDP_CKSUM, 0x400),
     /* Offload SCTP checksum. */
     DEF_OL_FLAG(DP_PACKET_OL_TX_SCTP_CKSUM, RTE_MBUF_F_TX_SCTP_CKSUM, 0x800),
-    /* Offload tunnel packet, outer header is IPv4. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_OUTER_IPV4,
-                RTE_MBUF_F_TX_OUTER_IPV4, 0x8000),
     /* Offload tunnel outer UDP checksum. */
     DEF_OL_FLAG(DP_PACKET_OL_TX_OUTER_UDP_CKSUM,
                 RTE_MBUF_F_TX_OUTER_UDP_CKSUM, 0x20000),
-    /* Offload tunnel packet, outer header is IPv6. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_OUTER_IPV6,
-                RTE_MBUF_F_TX_OUTER_IPV6, 0x40000),
 
     /* Adding new field requires adding to DP_PACKET_OL_SUPPORTED_MASK. */
 };
@@ -104,14 +94,10 @@ enum dp_packet_offload_mask {
                                      DP_PACKET_OL_RX_L4_CKSUM_GOOD   | \
                                      DP_PACKET_OL_RX_IP_CKSUM_GOOD   | \
                                      DP_PACKET_OL_TX_TCP_SEG         | \
-                                     DP_PACKET_OL_TX_IPV4            | \
-                                     DP_PACKET_OL_TX_IPV6            | \
                                      DP_PACKET_OL_TX_TCP_CKSUM       | \
                                      DP_PACKET_OL_TX_UDP_CKSUM       | \
                                      DP_PACKET_OL_TX_SCTP_CKSUM      | \
-                                     DP_PACKET_OL_TX_OUTER_IPV4      | \
-                                     DP_PACKET_OL_TX_OUTER_UDP_CKSUM | \
-                                     DP_PACKET_OL_TX_OUTER_IPV6)
+                                     DP_PACKET_OL_TX_OUTER_UDP_CKSUM)
 
 #define DP_PACKET_OL_TX_L4_MASK (DP_PACKET_OL_TX_TCP_CKSUM | \
                                  DP_PACKET_OL_TX_UDP_CKSUM | \
@@ -1114,20 +1100,6 @@ dp_packet_hwol_is_tso(const struct dp_packet *b)
     return !!(*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_TCP_SEG);
 }
 
-/* Returns 'true' if packet 'b' is marked for IPv4 checksum offloading. */
-static inline bool
-dp_packet_hwol_is_ipv4(const struct dp_packet *b)
-{
-    return !!(*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_IPV4);
-}
-
-/* Returns 'true' if packet 'p' is marked as IPv6. */
-static inline bool
-dp_packet_hwol_tx_ipv6(const struct dp_packet *p)
-{
-    return !!(*dp_packet_ol_flags_ptr(p) & DP_PACKET_OL_TX_IPV6);
-}
-
 /* Returns 'true' if packet 'b' is marked for TCP checksum offloading. */
 static inline bool
 dp_packet_hwol_l4_is_tcp(const struct dp_packet *b)
@@ -1152,20 +1124,6 @@ dp_packet_hwol_l4_is_sctp(struct dp_packet *b)
             DP_PACKET_OL_TX_SCTP_CKSUM;
 }
 
-/* Returns 'true' if packet 'b' is marked as having an outer IPv6 header. */
-static inline bool
-dp_packet_hwol_is_outer_ipv6(const struct dp_packet *b)
-{
-    return *dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_OUTER_IPV6;
-}
-
-/* Returns 'true' if packet 'b' is marked as having an outer IPv4 header. */
-static inline bool
-dp_packet_hwol_is_outer_ipv4(const struct dp_packet *b)
-{
-    return *dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_OUTER_IPV4;
-}
-
 /* Returns 'true' if packet 'b' is marked for outer UDP checksum offload. */
 static inline bool
 dp_packet_hwol_is_outer_udp_cksum(struct dp_packet *b)
@@ -1184,30 +1142,6 @@ static inline void
 dp_packet_hwol_reset_tx_l4_csum(struct dp_packet *p)
 {
     *dp_packet_ol_flags_ptr(p) &= ~DP_PACKET_OL_TX_L4_MASK;
-}
-
-/* Mark packet 'p' as IPv4. */
-static inline void
-dp_packet_hwol_set_tx_ipv4(struct dp_packet *p)
-{
-    *dp_packet_ol_flags_ptr(p) &= ~DP_PACKET_OL_TX_IPV6;
-    *dp_packet_ol_flags_ptr(p) |= DP_PACKET_OL_TX_IPV4;
-}
-
-/* Mark packet 'a' as IPv6. */
-static inline void
-dp_packet_hwol_set_tx_ipv6(struct dp_packet *a)
-{
-    *dp_packet_ol_flags_ptr(a) &= ~DP_PACKET_OL_TX_IPV4;
-    *dp_packet_ol_flags_ptr(a) |= DP_PACKET_OL_TX_IPV6;
-}
-
-/* Mark packet 'a' as a tunnel packet with outer IPv6 header. */
-static inline void
-dp_packet_hwol_set_tx_outer_ipv6(struct dp_packet *a)
-{
-    *dp_packet_ol_flags_ptr(a) &= ~DP_PACKET_OL_TX_OUTER_IPV4;
-    *dp_packet_ol_flags_ptr(a) |= DP_PACKET_OL_TX_OUTER_IPV6;
 }
 
 /* Mark packet 'b' for TCP checksum offloading.  It implies that either
@@ -1241,13 +1175,6 @@ static inline void
 dp_packet_hwol_set_tcp_seg(struct dp_packet *b)
 {
     *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_TCP_SEG;
-}
-
-/* Mark packet 'b' as a tunnel packet with outer IPv4 header. */
-static inline void
-dp_packet_hwol_set_tx_outer_ipv4(struct dp_packet *b)
-{
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_OUTER_IPV4;
 }
 
 static inline void

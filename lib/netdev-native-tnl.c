@@ -193,11 +193,6 @@ netdev_tnl_push_ip_header(struct dp_packet *packet, const void *header,
         ip6->ip6_plen = htons(*ip_tot_size);
         packet_set_ipv6_flow_label(&ip6->ip6_flow, ipv6_label);
         dp_packet_ip_csum_set_unknown(packet);
-        if (dp_packet_is_tunnel(packet)) {
-            dp_packet_hwol_set_tx_outer_ipv6(packet);
-        } else {
-            dp_packet_hwol_set_tx_ipv6(packet);
-        }
 
         packet->l4_ofs = dp_packet_size(packet) - *ip_tot_size;
 
@@ -208,11 +203,6 @@ netdev_tnl_push_ip_header(struct dp_packet *packet, const void *header,
         *ip_tot_size -= IP_HEADER_LEN;
         /* Postpone checksum to when the packet is pushed to the port. */
         dp_packet_ip_csum_set_partial(packet);
-        if (dp_packet_is_tunnel(packet)) {
-            dp_packet_hwol_set_tx_outer_ipv4(packet);
-        } else {
-            dp_packet_hwol_set_tx_ipv4(packet);
-        }
 
         packet->l4_ofs = dp_packet_size(packet) - *ip_tot_size;
 
@@ -262,24 +252,6 @@ static void
 dp_packet_tnl_ol_process(struct dp_packet *packet,
                          const struct ovs_action_push_tnl *data)
 {
-    struct ip_header *ip = NULL;
-
-    if (dp_packet_hwol_l4_mask(packet)) {
-        ip = dp_packet_l3(packet);
-
-        if (data->tnl_type == OVS_VPORT_TYPE_GENEVE ||
-            data->tnl_type == OVS_VPORT_TYPE_VXLAN ||
-            data->tnl_type == OVS_VPORT_TYPE_GRE ||
-            data->tnl_type == OVS_VPORT_TYPE_IP6GRE) {
-
-            if (IP_VER(ip->ip_ihl_ver) == 4) {
-                dp_packet_hwol_set_tx_ipv4(packet);
-            } else if (IP_VER(ip->ip_ihl_ver) == 6) {
-                dp_packet_hwol_set_tx_ipv6(packet);
-            }
-        }
-    }
-
     if (dp_packet_ip_checksum_good(packet)) {
         dp_packet_ip_inner_csum_set_good(packet);
     } else if (dp_packet_ip_checksum_partial(packet)) {

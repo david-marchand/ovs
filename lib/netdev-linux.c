@@ -7071,7 +7071,6 @@ netdev_linux_parse_l2(struct dp_packet *b, uint16_t *l4proto)
         }
 
         *l4proto = ip_hdr->ip_proto;
-        dp_packet_hwol_set_tx_ipv4(b);
     } else if (eth_type == htons(ETH_TYPE_IPV6)) {
         struct ovs_16aligned_ip6_hdr *nh6;
 
@@ -7081,7 +7080,6 @@ netdev_linux_parse_l2(struct dp_packet *b, uint16_t *l4proto)
         }
 
         *l4proto = nh6->ip6_ctlun.ip6_un1.ip6_un1_nxt;
-        dp_packet_hwol_set_tx_ipv6(b);
     }
 
     return 0;
@@ -7162,10 +7160,14 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
 
     if (dp_packet_hwol_is_tso(b)) {
         uint16_t tso_segsz = dp_packet_get_tso_segsz(b);
-        struct tcp_header *tcp = dp_packet_l4(b);
-        struct tcp_header *inner_tcp = dp_packet_inner_l4(b);
-        if (inner_tcp) {
-            tcp = inner_tcp;
+        const struct tcp_header *tcp;
+        const struct ip_header *ip;
+        if (dp_packet_inner_l4(b)) {
+            tcp = dp_packet_inner_l4(b);
+            ip = dp_packet_inner_l3(b);
+        } else {
+            tcp = dp_packet_l4(b);
+            ip = dp_packet_l3(b);
         }
         int tcp_hdr_len = TCP_OFFSET(tcp->tcp_ctl) * 4;
         int hdr_len = ((char *) tcp - (char *) dp_packet_eth(b))
@@ -7181,9 +7183,9 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
 
         vnet->hdr_len = (OVS_FORCE __virtio16)hdr_len;
         vnet->gso_size = (OVS_FORCE __virtio16)(tso_segsz);
-        if (dp_packet_hwol_is_ipv4(b)) {
+        if (IP_VER(ip->ip_ihl_ver) == 4) {
             vnet->gso_type = VIRTIO_NET_HDR_GSO_TCPV4;
-        } else if (dp_packet_hwol_tx_ipv6(b)) {
+        } else if (IP_VER(ip->ip_ihl_ver) == 6) {
             vnet->gso_type = VIRTIO_NET_HDR_GSO_TCPV6;
         } else {
             VLOG_ERR_RL(&rl, "Unknown gso_type for TSO packet. "
@@ -7239,12 +7241,12 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
                 l4_off = dp_packet_l4(b);
             }
 
+            const struct ip_header *ip_hdr = l3_off;
             struct tcp_header *tcp_hdr = l4_off;
             ovs_be16 csum = 0;
-            if (dp_packet_hwol_is_ipv4(b)) {
-                const struct ip_header *ip_hdr = l3_off;
+            if (IP_VER(ip_hdr->ip_ihl_ver) == 4) {
                 csum = ~csum_finish(packet_csum_pseudoheader(ip_hdr));
-            } else if (dp_packet_hwol_tx_ipv6(b)) {
+            } else if (IP_VER(ip_hdr->ip_ihl_ver) == 6) {
                 const struct ovs_16aligned_ip6_hdr *ip6_hdr = l3_off;
                 csum = ~csum_finish(packet_csum_pseudoheader6(ip6_hdr));
             }
@@ -7264,14 +7266,13 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
                 l3_off = dp_packet_l3(b);
                 l4_off = dp_packet_l4(b);
             }
+
+            const struct ip_header *ip_hdr = l3_off;
             struct udp_header *udp_hdr = l4_off;
-
             ovs_be16 csum = 0;
-
-            if (dp_packet_hwol_is_ipv4(b)) {
-                const struct ip_header *ip_hdr = l3_off;
+            if (IP_VER(ip_hdr->ip_ihl_ver) == 4) {
                 csum = ~csum_finish(packet_csum_pseudoheader(ip_hdr));
-            } else if (dp_packet_hwol_tx_ipv6(b)) {
+            } else if (IP_VER(ip_hdr->ip_ihl_ver) == 6) {
                 const struct ovs_16aligned_ip6_hdr *ip6_hdr = l4_off;
                 csum = ~csum_finish(packet_csum_pseudoheader6(ip6_hdr));
             }
