@@ -2629,15 +2629,14 @@ static bool
 netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
 {
     struct dp_packet *pkt = CONTAINER_OF(mbuf, struct dp_packet, mbuf);
+    bool l3_csum;
     void *l2;
     void *l3;
     void *l4;
 
-    const uint64_t all_inner_requests = (RTE_MBUF_F_TX_IP_CKSUM |
-                                         RTE_MBUF_F_TX_L4_MASK |
+    const uint64_t all_inner_requests = (RTE_MBUF_F_TX_L4_MASK |
                                          RTE_MBUF_F_TX_TCP_SEG);
-    const uint64_t all_outer_requests = (RTE_MBUF_F_TX_OUTER_IP_CKSUM |
-                                         RTE_MBUF_F_TX_OUTER_UDP_CKSUM);
+    const uint64_t all_outer_requests = RTE_MBUF_F_TX_OUTER_UDP_CKSUM;
     const uint64_t all_requests = all_inner_requests | all_outer_requests;
     const uint64_t all_inner_marks = (RTE_MBUF_F_TX_IPV4 |
                                       RTE_MBUF_F_TX_IPV6);
@@ -2645,7 +2644,10 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
                                       RTE_MBUF_F_TX_OUTER_IPV6);
     const uint64_t all_marks = all_inner_marks | all_outer_marks;
 
-    if (!(mbuf->ol_flags & all_requests)) {
+    if (!dp_packet_ip_checksum_partial(pkt)
+        && !dp_packet_ip_inner_checksum_partial(pkt)
+        && !(mbuf->ol_flags & all_requests)) {
+
         /* No offloads requested, no marks should be set. */
         mbuf->ol_flags &= ~all_marks;
 
@@ -2661,8 +2663,10 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
     }
 
     if (dp_packet_is_tunnel(pkt)
-        && (mbuf->ol_flags & all_inner_requests)) {
-        if (mbuf->ol_flags & all_outer_requests) {
+        && (dp_packet_ip_inner_checksum_partial(pkt)
+            || (mbuf->ol_flags & all_inner_requests))) {
+        if (dp_packet_ip_checksum_partial(pkt)
+            || (mbuf->ol_flags & all_outer_requests)) {
             mbuf->outer_l2_len = (char *) dp_packet_l3(pkt) -
                                  (char *) dp_packet_eth(pkt);
             mbuf->outer_l3_len = (char *) dp_packet_l4(pkt) -
@@ -2677,9 +2681,14 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
                 mbuf->ol_flags |= RTE_MBUF_F_TX_TUNNEL_GRE;
             }
 
+            if (dp_packet_ip_checksum_partial(pkt)) {
+                mbuf->ol_flags |= RTE_MBUF_F_TX_OUTER_IP_CKSUM;
+            }
+
             /* Inner L2 length must account for the tunnel header length. */
             l2 = dp_packet_l4(pkt);
             l3 = dp_packet_inner_l3(pkt);
+            l3_csum = dp_packet_ip_inner_checksum_partial(pkt);
             l4 = dp_packet_inner_l4(pkt);
         } else {
             /* If no outer offloading is requested, clear outer marks. */
@@ -2690,6 +2699,7 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
             /* Skip outer headers. */
             l2 = dp_packet_eth(pkt);
             l3 = dp_packet_inner_l3(pkt);
+            l3_csum = dp_packet_ip_inner_checksum_partial(pkt);
             l4 = dp_packet_inner_l4(pkt);
         }
     } else {
@@ -2697,8 +2707,7 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
             /* No inner offload is requested, fallback to non tunnel
              * checksum offloads. */
             mbuf->ol_flags &= ~all_inner_marks;
-            if (mbuf->ol_flags & RTE_MBUF_F_TX_OUTER_IP_CKSUM) {
-                mbuf->ol_flags |= RTE_MBUF_F_TX_IP_CKSUM;
+            if (dp_packet_ip_checksum_partial(pkt)) {
                 mbuf->ol_flags |= RTE_MBUF_F_TX_IPV4;
             }
             if (mbuf->ol_flags & RTE_MBUF_F_TX_OUTER_UDP_CKSUM) {
@@ -2713,6 +2722,7 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
 
         l2 = dp_packet_eth(pkt);
         l3 = dp_packet_l3(pkt);
+        l3_csum = dp_packet_ip_checksum_partial(pkt);
         l4 = dp_packet_l4(pkt);
     }
 
@@ -2720,6 +2730,9 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
 
     mbuf->l2_len = (char *) l3 - (char *) l2;
     mbuf->l3_len = (char *) l4 - (char *) l3;
+    if (l3_csum) {
+        mbuf->ol_flags |= RTE_MBUF_F_TX_IP_CKSUM;
+    }
 
     if (mbuf->ol_flags & RTE_MBUF_F_TX_TCP_SEG) {
         struct tcp_header *th = l4;

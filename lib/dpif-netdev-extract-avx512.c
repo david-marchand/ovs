@@ -762,9 +762,6 @@ static void
 mfex_ipv4_set_hwol(struct dp_packet *pkt)
 {
     dp_packet_hwol_set_tx_ipv4(pkt);
-    if (dp_packet_ip_checksum_good(pkt)) {
-        dp_packet_hwol_set_tx_ip_csum(pkt);
-    }
 }
 
 static void

@@ -1139,7 +1139,7 @@ netdev_dummy_rxq_recv(struct netdev_rxq *rxq_, struct dp_packet_batch *batch,
         ip_hdr = dp_packet_at(packet, packet->l3_ofs, sizeof *ip_hdr);
         if (ip_hdr && IP_VER(ip_hdr->ip_ihl_ver) == 4) {
             if (netdev->ol_ip_csum_set_good) {
-                dp_packet_ol_set_ip_csum_good(packet);
+                dp_packet_ip_csum_set_good(packet);
             }
             proto = ip_hdr->ip_proto;
         } else if (ip_hdr && IP_VER(ip_hdr->ip_ihl_ver) == 6) {
@@ -1244,10 +1244,8 @@ netdev_dummy_send(struct netdev *netdev, int qid,
             }
         }
 
-        if (dp_packet_hwol_tx_ip_csum(packet) &&
-            !dp_packet_ip_checksum_good(packet)) {
+        if (dp_packet_ip_checksum_partial(packet)) {
             dp_packet_ip_set_header_csum(packet, false);
-            dp_packet_ol_set_ip_csum_good(packet);
         }
 
         ovs_mutex_lock(&dev->mutex);

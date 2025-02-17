@@ -2222,8 +2222,7 @@ conn_key_extract(struct conntrack *ct, struct dp_packet *pkt, ovs_be16 dl_type,
             /* Validate the checksum only when hwol is not supported and the
              * packet's checksum status is not known. */
             ok = extract_l3_ipv4(&ctx->key, l3, dp_packet_l3_size(pkt), NULL,
-                                 !dp_packet_hwol_is_ipv4(pkt) &&
-                                 !dp_packet_ip_checksum_good(pkt));
+                                 dp_packet_ip_checksum_unknown(pkt));
         }
     } else if (ctx->key.dl_type == htons(ETH_TYPE_IPV6)) {
         ok = extract_l3_ipv6(&ctx->key, l3, dp_packet_l3_size(pkt), NULL);
@@ -3653,8 +3652,8 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
                 }
                 if (seq_skew) {
                     ip_len = ntohs(l3_hdr->ip_tot_len) + seq_skew;
-                    if (dp_packet_hwol_tx_ip_csum(pkt)) {
-                        dp_packet_ol_reset_ip_csum_good(pkt);
+                    if (dp_packet_ip_checksum_valid(pkt)) {
+                        dp_packet_ip_csum_set_partial(pkt);
                     } else {
                         l3_hdr->ip_csum = recalc_csum16(l3_hdr->ip_csum,
                                                         l3_hdr->ip_tot_len,

@@ -67,22 +67,11 @@ dp_packet_gso_seg_new(const struct dp_packet *p, size_t hdr_len,
     ol_flags = *dp_packet_ol_flags_ptr(seg) | DP_PACKET_OL_TX_TCP_CKSUM;
 
     ol_flags &= ~(DP_PACKET_OL_TX_TCP_SEG
-                  | DP_PACKET_OL_RX_L4_CKSUM_GOOD
-                  | DP_PACKET_OL_RX_IP_CKSUM_GOOD);
-
-    if (ol_flags & DP_PACKET_OL_TX_IPV4) {
-        ol_flags |= DP_PACKET_OL_TX_IP_CKSUM;
-    }
+                  | DP_PACKET_OL_RX_L4_CKSUM_GOOD);
 
     if (dp_packet_tunnel_is_geneve(p)
         || dp_packet_tunnel_is_vxlan(p)) {
-        if (ol_flags & DP_PACKET_OL_TX_OUTER_IPV4) {
-            ol_flags |= DP_PACKET_OL_TX_OUTER_IP_CKSUM;
-        }
         ol_flags |= DP_PACKET_OL_TX_OUTER_UDP_CKSUM;
-    } else if (dp_packet_tunnel_is_gre(p)
-               && ol_flags & DP_PACKET_OL_TX_OUTER_IPV4) {
-        ol_flags |= DP_PACKET_OL_TX_OUTER_IP_CKSUM;
     }
 
     *dp_packet_ol_flags_ptr(seg) = ol_flags;
@@ -194,6 +183,7 @@ dp_packet_gso(struct dp_packet *p, struct dp_packet_batch **batches)
                 ip_hdr->ip_tot_len = htons(dp_packet_inner_l3_size(seg));
                 ip_hdr->ip_id = htons(inner_ip_id);
                 ip_hdr->ip_csum = 0;
+                dp_packet_ip_inner_csum_set_partial(seg);
                 inner_ip_id++;
             } else {
                 struct ovs_16aligned_ip6_hdr *ip6_hdr;
@@ -210,6 +200,7 @@ dp_packet_gso(struct dp_packet *p, struct dp_packet_batch **batches)
             ip_hdr->ip_tot_len = htons(dp_packet_l3_size(seg));
             ip_hdr->ip_id = htons(outer_ip_id);
             ip_hdr->ip_csum = 0;
+            dp_packet_ip_csum_set_partial(seg);
             outer_ip_id++;
         } else {
             struct ovs_16aligned_ip6_hdr *ip6_hdr = dp_packet_l3(seg);

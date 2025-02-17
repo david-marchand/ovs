@@ -112,7 +112,7 @@ netdev_tnl_ip_extract_tnl_md(struct dp_packet *packet, struct flow_tnl *tnl,
 
         /* A packet coming from a network device might have the
          * csum already checked. In this case, skip the check. */
-        if (OVS_UNLIKELY(!dp_packet_hwol_l3_csum_ipv4_ol(packet))) {
+        if (OVS_UNLIKELY(dp_packet_ip_checksum_unknown(packet))) {
             if (csum(ip, IP_IHL(ip->ip_ihl_ver) * 4)) {
                 VLOG_WARN_RL(&err_rl, "ip packet has invalid checksum");
                 return NULL;
@@ -192,31 +192,30 @@ netdev_tnl_push_ip_header(struct dp_packet *packet, const void *header,
         *ip_tot_size -= IPV6_HEADER_LEN;
         ip6->ip6_plen = htons(*ip_tot_size);
         packet_set_ipv6_flow_label(&ip6->ip6_flow, ipv6_label);
-        packet->l4_ofs = dp_packet_size(packet) - *ip_tot_size;
-
+        dp_packet_ip_csum_set_unknown(packet);
         if (dp_packet_is_tunnel(packet)) {
             dp_packet_hwol_set_tx_outer_ipv6(packet);
         } else {
             dp_packet_hwol_set_tx_ipv6(packet);
         }
 
-        dp_packet_ol_reset_ip_csum_good(packet);
+        packet->l4_ofs = dp_packet_size(packet) - *ip_tot_size;
+
         return ip6 + 1;
     } else {
         ip = netdev_tnl_ip_hdr(eth);
         ip->ip_tot_len = htons(*ip_tot_size);
+        *ip_tot_size -= IP_HEADER_LEN;
         /* Postpone checksum to when the packet is pushed to the port. */
+        dp_packet_ip_csum_set_partial(packet);
         if (dp_packet_is_tunnel(packet)) {
             dp_packet_hwol_set_tx_outer_ipv4(packet);
-            dp_packet_hwol_set_tx_outer_ipv4_csum(packet);
         } else {
             dp_packet_hwol_set_tx_ipv4(packet);
-            dp_packet_hwol_set_tx_ip_csum(packet);
         }
 
-        dp_packet_ol_reset_ip_csum_good(packet);
-        *ip_tot_size -= IP_HEADER_LEN;
         packet->l4_ofs = dp_packet_size(packet) - *ip_tot_size;
+
         return ip + 1;
     }
 }
@@ -275,12 +274,21 @@ dp_packet_tnl_ol_process(struct dp_packet *packet,
 
             if (IP_VER(ip->ip_ihl_ver) == 4) {
                 dp_packet_hwol_set_tx_ipv4(packet);
-                dp_packet_hwol_set_tx_ip_csum(packet);
             } else if (IP_VER(ip->ip_ihl_ver) == 6) {
                 dp_packet_hwol_set_tx_ipv6(packet);
             }
         }
     }
+
+    if (dp_packet_ip_checksum_good(packet)) {
+        dp_packet_ip_inner_csum_set_good(packet);
+    } else if (dp_packet_ip_checksum_partial(packet)) {
+        dp_packet_ip_inner_csum_set_partial(packet);
+    } else {
+        /* Squash bad and unknown as inner unknown. */
+        dp_packet_ip_inner_csum_set_unknown(packet);
+    }
+    dp_packet_ip_csum_set_unknown(packet);
 
     if (data->tnl_type == OVS_VPORT_TYPE_GENEVE) {
         dp_packet_set_tunnel_geneve(packet);
