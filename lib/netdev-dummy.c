@@ -1131,15 +1131,30 @@ netdev_dummy_rxq_recv(struct netdev_rxq *rxq_, struct dp_packet_batch *batch,
     netdev->rxq_stats[rxq_->queue_id].bytes += dp_packet_size(packet);
     netdev->custom_stats[0].value++;
     netdev->custom_stats[1].value++;
-    if (netdev->ol_ip_csum_set_good) {
-        /* The netdev hardware sets the flag when the packet has good csum. */
-        dp_packet_ol_set_ip_csum_good(packet);
-    }
 
-    if (userspace_tso_enabled() && netdev->ol_tso_segsz) {
-        dp_packet_set_tso_segsz(packet, netdev->ol_tso_segsz);
-        dp_packet_hwol_set_tcp_seg(packet);
-        dp_packet_hwol_set_csum_tcp(packet);
+    if (dp_packet_l3(packet)) {
+        const struct ip_header *ip_hdr;
+        uint8_t proto = 0;
+
+        ip_hdr = dp_packet_at(packet, packet->l3_ofs, sizeof *ip_hdr);
+        if (ip_hdr && IP_VER(ip_hdr->ip_ihl_ver) == 4) {
+            if (netdev->ol_ip_csum_set_good) {
+                dp_packet_ol_set_ip_csum_good(packet);
+            }
+            proto = ip_hdr->ip_proto;
+        } else if (ip_hdr && IP_VER(ip_hdr->ip_ihl_ver) == 6) {
+            const struct ovs_16aligned_ip6_hdr *ip6_hdr;
+
+            ip6_hdr = dp_packet_at(packet, packet->l3_ofs, sizeof *ip6_hdr);
+            if (ip6_hdr) {
+                proto = ip6_hdr->ip6_nxt;
+            }
+        }
+
+        if (proto == IPPROTO_TCP && netdev->ol_tso_segsz) {
+            dp_packet_set_tso_segsz(packet, netdev->ol_tso_segsz);
+            dp_packet_hwol_set_tcp_seg(packet);
+        }
     }
 
     ovs_mutex_unlock(&netdev->mutex);
