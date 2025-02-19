@@ -2235,8 +2235,7 @@ conn_key_extract(struct conntrack *ct, struct dp_packet *pkt, ovs_be16 dl_type,
             /* Validate the checksum only when hwol is not supported. */
             if (extract_l4(&ctx->key, l4, dp_packet_l4_size(pkt),
                            &ctx->icmp_related, l3,
-                           !dp_packet_l4_checksum_good(pkt) &&
-                           !dp_packet_hwol_tx_l4_checksum(pkt),
+                           dp_packet_l4_checksum_unknown(pkt),
                            NULL)) {
                 ctx->hash = conn_key_hash(&ctx->key, ct->hash_basis);
                 return true;
@@ -3675,8 +3674,8 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
             adj_seqnum(&th->tcp_seq, ec->seq_skew);
     }
 
-    if (dp_packet_hwol_tx_l4_checksum(pkt)) {
-        dp_packet_ol_reset_l4_csum_good(pkt);
+    if (dp_packet_l4_checksum_valid(pkt)) {
+        dp_packet_l4_csum_set_partial(pkt);
     } else {
         th->tcp_csum = 0;
         if (ctx->key.dl_type == htons(ETH_TYPE_IPV6)) {

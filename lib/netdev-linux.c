@@ -89,6 +89,7 @@ COVERAGE_DEFINE(netdev_get_hwaddr);
 COVERAGE_DEFINE(netdev_set_hwaddr);
 COVERAGE_DEFINE(netdev_get_ethtool);
 COVERAGE_DEFINE(netdev_set_ethtool);
+COVERAGE_DEFINE(netdev_linux_unknown_l4_csum);
 
 
 #ifndef IFLA_IF_NETNSID
@@ -7039,47 +7040,62 @@ af_packet_sock(void)
 }
 
 static int
-netdev_linux_parse_l2(struct dp_packet *b, uint16_t *l4proto)
+netdev_linux_parse_packet(struct dp_packet *b, uint16_t *l2_len,
+                          uint16_t *l3_len, uint16_t *l4proto)
 {
     struct eth_header *eth_hdr;
     ovs_be16 eth_type;
-    int l2_len;
 
     eth_hdr = dp_packet_at(b, 0, ETH_HEADER_LEN);
     if (!eth_hdr) {
         return -EINVAL;
     }
 
-    l2_len = ETH_HEADER_LEN;
+    *l2_len = ETH_HEADER_LEN;
     eth_type = eth_hdr->eth_type;
     if (eth_type_vlan(eth_type)) {
-        struct vlan_header *vlan = dp_packet_at(b, l2_len, VLAN_HEADER_LEN);
+        struct vlan_header *vlan = dp_packet_at(b, *l2_len, VLAN_HEADER_LEN);
 
         if (!vlan) {
             return -EINVAL;
         }
 
         eth_type = vlan->vlan_next_type;
-        l2_len += VLAN_HEADER_LEN;
+        *l2_len += VLAN_HEADER_LEN;
     }
 
     if (eth_type == htons(ETH_TYPE_IP)) {
-        struct ip_header *ip_hdr = dp_packet_at(b, l2_len, IP_HEADER_LEN);
+        struct ip_header *ip_hdr = dp_packet_at(b, *l2_len, IP_HEADER_LEN);
 
         if (!ip_hdr) {
             return -EINVAL;
         }
 
+        *l3_len = IP_IHL(ip_hdr->ip_ihl_ver) * 4;
         *l4proto = ip_hdr->ip_proto;
     } else if (eth_type == htons(ETH_TYPE_IPV6)) {
         struct ovs_16aligned_ip6_hdr *nh6;
+        const void *data;
+        uint8_t nw_proto;
+        uint8_t nw_frag;
+        size_t size;
 
-        nh6 = dp_packet_at(b, l2_len, IPV6_HEADER_LEN);
+        nh6 = dp_packet_at(b, *l2_len, IPV6_HEADER_LEN);
         if (!nh6) {
             return -EINVAL;
         }
 
-        *l4proto = nh6->ip6_ctlun.ip6_un1.ip6_un1_nxt;
+        data = nh6;
+        size = (const char *)dp_packet_tail(b) - (const char *)data;
+        nw_proto = nh6->ip6_ctlun.ip6_un1.ip6_un1_nxt;
+        if (!parse_ipv6_ext_hdrs(&data, &size, &nw_proto, &nw_frag,
+                                 NULL, NULL)) {
+            return -EINVAL;
+        }
+        *l3_len = (const char *)data - (const char *)nh6;
+        *l4proto = nw_proto;
+    } else {
+        *l3_len = *l4proto = 0;
     }
 
     return 0;
@@ -7102,25 +7118,44 @@ netdev_linux_parse_vnet_hdr(struct dp_packet *b)
     }
 
     if (vnet->flags == VIRTIO_NET_HDR_F_NEEDS_CSUM) {
-        uint16_t l4proto = 0;
+        uint16_t csum_offset = (OVS_FORCE uint16_t) vnet->csum_offset;
+        uint16_t csum_start = (OVS_FORCE uint16_t) vnet->csum_start;
+        uint16_t l4proto;
+        uint16_t l2_len;
+        uint16_t l3_len;
 
-        if (netdev_linux_parse_l2(b, &l4proto)) {
+        if (netdev_linux_parse_packet(b, &l2_len, &l3_len, &l4proto)) {
             return EINVAL;
         }
 
-        if (l4proto == IPPROTO_UDP) {
-            dp_packet_hwol_set_csum_udp(b);
+        if (csum_start && csum_offset && csum_start == l2_len + l3_len
+            && ((csum_offset == offsetof(struct tcp_header, tcp_csum)
+                 && l4proto == IPPROTO_TCP)
+                || (csum_offset == offsetof(struct udp_header, udp_csum)
+                    && l4proto == IPPROTO_UDP)
+                || (csum_offset == offsetof(struct sctp_header, sctp_csum)
+                    && l4proto == IPPROTO_SCTP))) {
+            dp_packet_l4_csum_set_partial(b);
+        } else {
+            ovs_be16 *csum_l4;
+            void *l4;
+
+            COVERAGE_INC(netdev_linux_unknown_l4_csum);
+
+            csum_l4 = dp_packet_at(b, csum_start + csum_offset,
+                                   sizeof *csum_l4);
+            if (!csum_l4) {
+                return EINVAL;
+            }
+
+            l4 = dp_packet_at(b, csum_start, dp_packet_size(b) - csum_start);
+            *csum_l4 = csum(l4, dp_packet_size(b) - csum_start);
+
+            if (l4proto == IPPROTO_TCP || l4proto == IPPROTO_UDP
+                || l4proto == IPPROTO_SCTP) {
+                dp_packet_l4_csum_set_good(b);
+            }
         }
-        /* The packet has offloaded checksum. However, there is no
-         * additional information like the protocol used, so it would
-         * require to parse the packet here. The checksum starting point
-         * and offset are going to be verified when the packet headers
-         * are parsed during miniflow extraction. */
-        b->csum_start = (OVS_FORCE uint16_t) vnet->csum_start;
-        b->csum_offset = (OVS_FORCE uint16_t) vnet->csum_offset;
-    } else {
-        b->csum_start = 0;
-        b->csum_offset = 0;
     }
 
     int ret = 0;
@@ -7189,8 +7224,8 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
             vnet->gso_type = VIRTIO_NET_HDR_GSO_TCPV6;
         } else {
             VLOG_ERR_RL(&rl, "Unknown gso_type for TSO packet. "
-                        "Flags: %#"PRIx64,
-                        (uint64_t) *dp_packet_ol_flags_ptr(b));
+                        "Flags: %#"PRIx64", Offloads: %"PRIx32,
+                        (uint64_t) *dp_packet_ol_flags_ptr(b), b->offloads);
             return EINVAL;
         }
     } else {
@@ -7199,26 +7234,38 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
         vnet->gso_type = VIRTIO_NET_HDR_GSO_NONE;
     }
 
-    bool l4_is_good = dp_packet_l4_checksum_good(b);
-
-    if ((dp_packet_tunnel_is_vxlan(b) ||
-         dp_packet_tunnel_is_geneve(b)) &&
-        dp_packet_hwol_tx_l4_checksum(b)) {
-        /* This condition is needed because dp-packet doesn't currently track
-         * outer and inner checksum statuses seperately. In the case of these
-         * two tunnel types we can end up setting outer l4 as good but still
-         * need to complete the inner l4. */
-        l4_is_good = !(dp_packet_hwol_l4_is_tcp(b) ||
-                       dp_packet_hwol_l4_is_udp(b));
-    }
-
-    if (l4_is_good) {
+    if (dp_packet_l4_checksum_good(b)
+        && (!dp_packet_is_tunnel(b)
+            || dp_packet_l4_inner_checksum_good(b))) {
         /* The packet has good L4 checksum. No need to validate again. */
         vnet->csum_start = vnet->csum_offset = (OVS_FORCE __virtio16) 0;
         vnet->flags = VIRTIO_NET_HDR_F_DATA_VALID;
-    } else if (dp_packet_hwol_tx_l4_checksum(b)) {
+    } else if (dp_packet_l4_checksum_partial(b)
+               || dp_packet_l4_inner_checksum_partial(b)) {
+        const struct ip_header *ip_hdr;
+        void *l3_off;
+        void *l4_off;
+        bool is_sctp;
+        bool is_tcp;
+        bool is_udp;
+
+        if (dp_packet_l4_inner_checksum_partial(b)) {
+            l3_off = dp_packet_inner_l3(b);
+            l4_off = dp_packet_inner_l4(b);
+            is_tcp = dp_packet_l4_inner_is_tcp(b);
+            is_udp = dp_packet_l4_inner_is_udp(b);
+            is_sctp = dp_packet_l4_inner_is_sctp(b);
+        } else {
+            l3_off = dp_packet_l3(b);
+            l4_off = dp_packet_l4(b);
+            is_tcp = dp_packet_l4_is_tcp(b);
+            is_udp = dp_packet_l4_is_udp(b);
+            is_sctp = dp_packet_l4_is_sctp(b);
+        }
+        ip_hdr = l3_off;
+
         /* The csum calculation is offloaded. */
-        if (dp_packet_hwol_l4_is_tcp(b)) {
+        if (is_tcp) {
             /* Virtual I/O Device (VIRTIO) Version 1.1
              * 5.1.6.2 Packet Transmission
              * If the driver negotiated VIRTIO_NET_F_CSUM, it can skip
@@ -7233,17 +7280,9 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
              * the TCP pseudo header, so that replacing it by the ones
              * complement checksum of the TCP header and body will give
              * the correct result. */
-            void *l3_off = dp_packet_inner_l3(b);
-            void *l4_off = dp_packet_inner_l4(b);
-
-            if (!l3_off || !l4_off) {
-                l3_off = dp_packet_l3(b);
-                l4_off = dp_packet_l4(b);
-            }
-
-            const struct ip_header *ip_hdr = l3_off;
             struct tcp_header *tcp_hdr = l4_off;
             ovs_be16 csum = 0;
+
             if (IP_VER(ip_hdr->ip_ihl_ver) == 4) {
                 csum = ~csum_finish(packet_csum_pseudoheader(ip_hdr));
             } else if (IP_VER(ip_hdr->ip_ihl_ver) == 6) {
@@ -7257,23 +7296,14 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
                                     (char *) dp_packet_data(b));
             vnet->csum_offset = (OVS_FORCE __virtio16) __builtin_offsetof(
                                     struct tcp_header, tcp_csum);
-        } else if (dp_packet_hwol_l4_is_udp(b)) {
-            /* Favour the inner packet when indicating checksum offsets. */
-            void *l3_off = dp_packet_inner_l3(b);
-            void *l4_off = dp_packet_inner_l4(b);
-
-            if (!l3_off || !l4_off) {
-                l3_off = dp_packet_l3(b);
-                l4_off = dp_packet_l4(b);
-            }
-
-            const struct ip_header *ip_hdr = l3_off;
+        } else if (is_udp) {
             struct udp_header *udp_hdr = l4_off;
             ovs_be16 csum = 0;
+
             if (IP_VER(ip_hdr->ip_ihl_ver) == 4) {
                 csum = ~csum_finish(packet_csum_pseudoheader(ip_hdr));
             } else if (IP_VER(ip_hdr->ip_ihl_ver) == 6) {
-                const struct ovs_16aligned_ip6_hdr *ip6_hdr = l4_off;
+                const struct ovs_16aligned_ip6_hdr *ip6_hdr = l3_off;
                 csum = ~csum_finish(packet_csum_pseudoheader6(ip6_hdr));
             }
 
@@ -7283,7 +7313,7 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
                                     (char *) dp_packet_data(b));;
             vnet->csum_offset = (OVS_FORCE __virtio16) __builtin_offsetof(
                                     struct udp_header, udp_csum);
-        } else if (dp_packet_hwol_l4_is_sctp(b)) {
+        } else if (is_sctp) {
             /* The Linux kernel networking stack only supports csum_start
              * and csum_offset when SCTP GSO is enabled.  See kernel's
              * skb_csum_hwoffload_help(). Currently there is no SCTP
@@ -7291,11 +7321,16 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
             vnet->csum_start = vnet->csum_offset = (OVS_FORCE __virtio16) 0;
             vnet->flags = 0;
         } else {
-            /* This should only happen when DP_PACKET_OL_TX_L4_MASK includes
-             * a new flag that is not covered in above checks. */
+            /* This should only happen when a new L4 proto
+             * is not covered in above checks. */
+            struct ds ds = DS_EMPTY_INITIALIZER;
+            ds_put_hex_dump(&ds, dp_packet_data(b), dp_packet_size(b), 0,
+                            false);
             VLOG_WARN_RL(&rl, "Unsupported L4 checksum offload. "
-                         "Flags: %"PRIu64,
-                         (uint64_t)*dp_packet_ol_flags_ptr(b));
+                         "Flags: %"PRIu64", Offloads: %"PRIu32"\n%s",
+                         (uint64_t)*dp_packet_ol_flags_ptr(b), b->offloads,
+                         ds_cstr(&ds));
+            ds_destroy(&ds);
             vnet->csum_start = vnet->csum_offset = (OVS_FORCE __virtio16) 0;
             vnet->flags = 0;
         }

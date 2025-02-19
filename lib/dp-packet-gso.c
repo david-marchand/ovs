@@ -38,7 +38,6 @@ dp_packet_gso_seg_new(const struct dp_packet *p, size_t hdr_len,
 {
     struct dp_packet *seg = dp_packet_new_with_headroom(hdr_len + data_len,
                                                         dp_packet_headroom(p));
-    uint64_t ol_flags;
 
     /* Append the original packet headers and then the payload. */
     dp_packet_put(seg, dp_packet_data(p), hdr_len);
@@ -64,17 +63,7 @@ dp_packet_gso_seg_new(const struct dp_packet *p, size_t hdr_len,
 
     /* Resets TCP Segmentation in packet 'p' and adjust flags to indicate
      * L3 and L4 checksumming is now required. */
-    ol_flags = *dp_packet_ol_flags_ptr(seg) | DP_PACKET_OL_TX_TCP_CKSUM;
-
-    ol_flags &= ~(DP_PACKET_OL_TX_TCP_SEG
-                  | DP_PACKET_OL_RX_L4_CKSUM_GOOD);
-
-    if (dp_packet_tunnel_is_geneve(p)
-        || dp_packet_tunnel_is_vxlan(p)) {
-        ol_flags |= DP_PACKET_OL_TX_OUTER_UDP_CKSUM;
-    }
-
-    *dp_packet_ol_flags_ptr(seg) = ol_flags;
+    *dp_packet_ol_flags_ptr(seg) &= ~DP_PACKET_OL_TX_TCP_SEG;
 
     return seg;
 }
@@ -171,6 +160,7 @@ dp_packet_gso(struct dp_packet *p, struct dp_packet_batch **batches)
 
             tnl_hdr = dp_packet_l4(seg);
             tnl_hdr->udp_len = htons(dp_packet_l4_size(seg));
+            dp_packet_l4_csum_set_partial(seg);
         }
 
         if (udp_tnl || gre_tnl) {
@@ -209,8 +199,10 @@ dp_packet_gso(struct dp_packet *p, struct dp_packet_batch **batches)
         /* Update L4 header. */
         if (udp_tnl || gre_tnl) {
             tcp_hdr = dp_packet_inner_l4(seg);
+            dp_packet_l4_inner_csum_set_partial(seg);
         } else {
             tcp_hdr = dp_packet_l4(seg);
+            dp_packet_l4_csum_set_partial(seg);
         }
         put_16aligned_be32(&tcp_hdr->tcp_seq, htonl(tcp_seq));
         tcp_seq += seg_len;

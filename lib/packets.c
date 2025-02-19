@@ -1129,15 +1129,15 @@ packet_set_ipv4_addr(struct dp_packet *packet,
     pkt_metadata_init_conn(&packet->md);
 
     if (nh->ip_proto == IPPROTO_TCP && l4_size >= TCP_HEADER_LEN) {
-        if (dp_packet_hwol_l4_is_tcp(packet)) {
-            dp_packet_ol_reset_l4_csum_good(packet);
+        if (dp_packet_l4_checksum_valid(packet)) {
+            dp_packet_l4_csum_set_partial(packet);
         } else {
             struct tcp_header *th = dp_packet_l4(packet);
             th->tcp_csum = recalc_csum32(th->tcp_csum, old_addr, new_addr);
         }
     } else if (nh->ip_proto == IPPROTO_UDP && l4_size >= UDP_HEADER_LEN ) {
-        if (dp_packet_hwol_l4_is_udp(packet)) {
-            dp_packet_ol_reset_l4_csum_good(packet);
+        if (dp_packet_l4_checksum_valid(packet)) {
+            dp_packet_l4_csum_set_partial(packet);
         } else {
             struct udp_header *uh = dp_packet_l4(packet);
             if (uh->udp_csum) {
@@ -1250,16 +1250,16 @@ packet_update_csum128(struct dp_packet *packet, uint8_t proto,
     size_t l4_size = dp_packet_l4_size(packet);
 
     if (proto == IPPROTO_TCP && l4_size >= TCP_HEADER_LEN) {
-        if (dp_packet_hwol_l4_is_tcp(packet)) {
-            dp_packet_ol_reset_l4_csum_good(packet);
+        if (dp_packet_l4_checksum_valid(packet)) {
+            dp_packet_l4_csum_set_partial(packet);
         } else {
             struct tcp_header *th = dp_packet_l4(packet);
 
             th->tcp_csum = recalc_csum128(th->tcp_csum, addr, new_addr);
         }
     } else if (proto == IPPROTO_UDP && l4_size >= UDP_HEADER_LEN) {
-        if (dp_packet_hwol_l4_is_udp(packet)) {
-            dp_packet_ol_reset_l4_csum_good(packet);
+        if (dp_packet_l4_checksum_valid(packet)) {
+            dp_packet_l4_csum_set_partial(packet);
         } else {
             struct udp_header *uh = dp_packet_l4(packet);
 
@@ -1403,8 +1403,8 @@ packet_set_tcp_port(struct dp_packet *packet, ovs_be16 src, ovs_be16 dst)
     struct tcp_header *th = dp_packet_l4(packet);
     ovs_be16 *csum = NULL;
 
-    if (dp_packet_hwol_l4_is_tcp(packet)) {
-        dp_packet_ol_reset_l4_csum_good(packet);
+    if (dp_packet_l4_checksum_valid(packet)) {
+        dp_packet_l4_csum_set_partial(packet);
     } else {
         csum = &th->tcp_csum;
     }
@@ -1422,8 +1422,8 @@ packet_set_udp_port(struct dp_packet *packet, ovs_be16 src, ovs_be16 dst)
 {
     struct udp_header *uh = dp_packet_l4(packet);
 
-    if (dp_packet_hwol_l4_is_udp(packet)) {
-        dp_packet_ol_reset_l4_csum_good(packet);
+    if (dp_packet_l4_checksum_valid(packet)) {
+        dp_packet_l4_csum_set_partial(packet);
         packet_set_port(&uh->udp_src, src, NULL);
         packet_set_port(&uh->udp_dst, dst, NULL);
     } else {
@@ -1448,8 +1448,8 @@ packet_set_sctp_port(struct dp_packet *packet, ovs_be16 src, ovs_be16 dst)
 {
     struct sctp_header *sh = dp_packet_l4(packet);
 
-    if (dp_packet_hwol_l4_is_sctp(packet)) {
-        dp_packet_ol_reset_l4_csum_good(packet);
+    if (dp_packet_l4_checksum_valid(packet)) {
+        dp_packet_l4_csum_set_partial(packet);
         sh->sctp_src = src;
         sh->sctp_dst = dst;
     } else {

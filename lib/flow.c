@@ -810,7 +810,6 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     uint8_t nw_frag, nw_tos, nw_ttl, nw_proto;
     uint8_t *ct_nw_proto_p = NULL;
     ovs_be16 ct_tp_src = 0, ct_tp_dst = 0;
-    bool tunneling;
 
     /* Metadata. */
     if (flow_tnl_dst_is_set(&md->tunnel)) {
@@ -864,8 +863,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
 
     /* Initialize packet's layer pointer and offsets. */
     frame = data;
-    tunneling = dp_packet_is_tunnel(packet);
-    if (tunneling) {
+    if (dp_packet_is_tunnel(packet)) {
         /* Preserve inner offsets from previous circulation. */
         dp_packet_reset_outer_offsets(packet);
     } else {
@@ -1062,11 +1060,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
                     } else if (dl_type == htons(ETH_TYPE_IPV6)) {
                         dp_packet_update_rss_hash_ipv6_tcp_udp(packet);
                     }
-                    dp_packet_ol_l4_csum_check_partial(packet);
-                    if (dp_packet_l4_checksum_good(packet)
-                        || dp_packet_ol_l4_csum_partial(packet)) {
-                        dp_packet_hwol_set_csum_tcp(packet);
-                    }
+                    dp_packet_l4_set_tcp(packet);
                 }
             }
         } else if (OVS_LIKELY(nw_proto == IPPROTO_UDP)) {
@@ -1082,15 +1076,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
                 } else if (dl_type == htons(ETH_TYPE_IPV6)) {
                     dp_packet_update_rss_hash_ipv6_tcp_udp(packet);
                 }
-                dp_packet_ol_l4_csum_check_partial(packet);
-                if (dp_packet_l4_checksum_good(packet)
-                    || dp_packet_ol_l4_csum_partial(packet)) {
-                    if (tunneling) {
-                        dp_packet_hwol_set_outer_udp_csum(packet);
-                    } else {
-                        dp_packet_hwol_set_csum_udp(packet);
-                    }
-                }
+                dp_packet_l4_set_udp(packet);
             }
         } else if (OVS_LIKELY(nw_proto == IPPROTO_SCTP)) {
             if (OVS_LIKELY(size >= SCTP_HEADER_LEN)) {
@@ -1100,11 +1086,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
                 miniflow_push_be16(mf, tp_dst, sctp->sctp_dst);
                 miniflow_push_be16(mf, ct_tp_src, ct_tp_src);
                 miniflow_push_be16(mf, ct_tp_dst, ct_tp_dst);
-                dp_packet_ol_l4_csum_check_partial(packet);
-                if (dp_packet_l4_checksum_good(packet)
-                    || dp_packet_ol_l4_csum_partial(packet)) {
-                    dp_packet_hwol_set_csum_sctp(packet);
-                }
+                dp_packet_l4_set_sctp(packet);
             }
         } else if (OVS_LIKELY(nw_proto == IPPROTO_ICMP)) {
             if (OVS_LIKELY(size >= ICMP_HEADER_LEN)) {
@@ -1282,11 +1264,17 @@ parse_tcp_flags(struct dp_packet *packet,
     }
 
     packet->l4_ofs = (uint16_t)((char *)data - frame);
-    if (!(nw_frag & FLOW_NW_FRAG_LATER) && nw_proto == IPPROTO_TCP &&
-        size >= TCP_HEADER_LEN) {
-        const struct tcp_header *tcp = data;
+    if (!(nw_frag & FLOW_NW_FRAG_LATER)) {
+        if (nw_proto == IPPROTO_TCP && size >= TCP_HEADER_LEN) {
+            const struct tcp_header *tcp = data;
 
-        return TCP_FLAGS(tcp->tcp_ctl);
+            dp_packet_l4_set_tcp(packet);
+            return TCP_FLAGS(tcp->tcp_ctl);
+        } else if (nw_proto == IPPROTO_UDP && size >= UDP_HEADER_LEN) {
+            dp_packet_l4_set_udp(packet);
+        } else if (nw_proto == IPPROTO_SCTP && size >= SCTP_HEADER_LEN) {
+            dp_packet_l4_set_sctp(packet);
+        }
     }
 
     return 0;
@@ -3232,7 +3220,7 @@ flow_compose_l4_csum(struct dp_packet *p, const struct flow *flow,
             tcp->tcp_csum = 0;
             tcp->tcp_csum = csum_finish(csum_continue(pseudo_hdr_csum,
                                                       tcp, l4_len));
-            dp_packet_ol_set_l4_csum_good(p);
+            dp_packet_l4_csum_set_good(p);
         } else if (flow->nw_proto == IPPROTO_UDP) {
             struct udp_header *udp = dp_packet_l4(p);
 
@@ -3242,7 +3230,7 @@ flow_compose_l4_csum(struct dp_packet *p, const struct flow *flow,
             if (!udp->udp_csum) {
                 udp->udp_csum = htons(0xffff);
             }
-            dp_packet_ol_set_l4_csum_good(p);
+            dp_packet_l4_csum_set_good(p);
         } else if (flow->nw_proto == IPPROTO_ICMP) {
             struct icmp_header *icmp = dp_packet_l4(p);
 

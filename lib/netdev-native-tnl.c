@@ -222,8 +222,7 @@ udp_extract_tnl_md(struct dp_packet *packet, struct flow_tnl *tnl,
     }
 
     if (udp->udp_csum) {
-        if (OVS_LIKELY(!dp_packet_ol_l4_csum_partial(packet)) &&
-            OVS_UNLIKELY(!dp_packet_l4_checksum_good(packet))) {
+        if (dp_packet_l4_checksum_unknown(packet)) {
             uint32_t csum;
             if (netdev_tnl_is_header_ipv6(dp_packet_data(packet))) {
                 csum = packet_csum_pseudoheader6(dp_packet_l3(packet));
@@ -260,7 +259,28 @@ dp_packet_tnl_ol_process(struct dp_packet *packet,
         /* Squash bad and unknown as inner unknown. */
         dp_packet_ip_inner_csum_set_unknown(packet);
     }
+
+    if (dp_packet_l4_checksum_good(packet)) {
+        dp_packet_l4_inner_csum_set_good(packet);
+    } else if (dp_packet_l4_checksum_partial(packet)) {
+        dp_packet_l4_inner_csum_set_partial(packet);
+    } else {
+        /* Squash bad and unknown as inner unknown. */
+        dp_packet_l4_inner_csum_set_unknown(packet);
+    }
+
+    if (dp_packet_l4_is_tcp(packet)) {
+        dp_packet_l4_inner_set_tcp(packet);
+    } else if (dp_packet_l4_is_udp(packet)) {
+        dp_packet_l4_inner_set_udp(packet);
+    } else if (dp_packet_l4_is_sctp(packet)) {
+        dp_packet_l4_inner_set_sctp(packet);
+    } else {
+        dp_packet_l4_inner_set_unknown(packet);
+    }
+
     dp_packet_ip_csum_set_unknown(packet);
+    dp_packet_l4_csum_set_unknown(packet);
 
     if (data->tnl_type == OVS_VPORT_TYPE_GENEVE) {
         dp_packet_set_tunnel_geneve(packet);
@@ -294,20 +314,11 @@ netdev_tnl_push_udp_header(const struct netdev *netdev OVS_UNUSED,
     udp->udp_src = udp_src;
     udp->udp_len = htons(ip_tot_size);
 
+    dp_packet_l4_set_udp(packet);
     if (udp->udp_csum) {
-        dp_packet_ol_reset_l4_csum_good(packet);
-        if (dp_packet_tunnel_is_geneve(packet) ||
-            dp_packet_tunnel_is_vxlan(packet)) {
-            dp_packet_hwol_set_outer_udp_csum(packet);
-        } else {
-            dp_packet_hwol_set_csum_udp(packet);
-        }
-    }
-
-    if (packet->csum_start && packet->csum_offset) {
-        dp_packet_ol_set_l4_csum_partial(packet);
-    } else if (!udp->udp_csum) {
-        dp_packet_ol_set_l4_csum_good(packet);
+        dp_packet_l4_csum_set_partial(packet);
+    } else {
+        dp_packet_l4_csum_set_good(packet);
     }
 
     if (l3_ofs != UINT16_MAX) {
@@ -870,8 +881,8 @@ netdev_gtpu_push_header(const struct netdev *netdev,
     udp->udp_src = udp_src;
     udp->udp_len = htons(ip_tot_size);
     /* Postpone checksum to the egress netdev. */
-    dp_packet_hwol_set_csum_udp(packet);
-    dp_packet_ol_reset_l4_csum_good(packet);
+    dp_packet_l4_set_udp(packet);
+    dp_packet_l4_csum_set_partial(packet);
 
     gtpuh = ALIGNED_CAST(struct gtpuhdr *, udp + 1);
 
