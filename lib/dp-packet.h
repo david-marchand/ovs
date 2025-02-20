@@ -86,12 +86,6 @@ enum dp_packet_offload_mask {
     DEF_OL_FLAG(DP_PACKET_OL_TX_SCTP_CKSUM, RTE_MBUF_F_TX_SCTP_CKSUM, 0x800),
     /* Offload IP checksum. */
     DEF_OL_FLAG(DP_PACKET_OL_TX_IP_CKSUM, RTE_MBUF_F_TX_IP_CKSUM, 0x1000),
-    /* Offload packet is tunnel GENEVE. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_TUNNEL_GENEVE,
-                RTE_MBUF_F_TX_TUNNEL_GENEVE, 0x2000),
-    /* Offload packet is tunnel VXLAN. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_TUNNEL_VXLAN,
-                RTE_MBUF_F_TX_TUNNEL_VXLAN, 0x4000),
     /* Offload tunnel packet, outer header is IPv4. */
     DEF_OL_FLAG(DP_PACKET_OL_TX_OUTER_IPV4,
                 RTE_MBUF_F_TX_OUTER_IPV4, 0x8000),
@@ -104,9 +98,6 @@ enum dp_packet_offload_mask {
     /* Offload tunnel packet, outer header is IPv6. */
     DEF_OL_FLAG(DP_PACKET_OL_TX_OUTER_IPV6,
                 RTE_MBUF_F_TX_OUTER_IPV6, 0x40000),
-    /* Offload packet is GRE tunnel. */
-    DEF_OL_FLAG(DP_PACKET_OL_TX_TUNNEL_GRE,
-                RTE_MBUF_F_TX_TUNNEL_GRE, 0x80000),
 
     /* Adding new field requires adding to DP_PACKET_OL_SUPPORTED_MASK. */
 };
@@ -124,9 +115,6 @@ enum dp_packet_offload_mask {
                                      DP_PACKET_OL_TX_UDP_CKSUM       | \
                                      DP_PACKET_OL_TX_SCTP_CKSUM      | \
                                      DP_PACKET_OL_TX_IP_CKSUM        | \
-                                     DP_PACKET_OL_TX_TUNNEL_GENEVE   | \
-                                     DP_PACKET_OL_TX_TUNNEL_VXLAN    | \
-                                     DP_PACKET_OL_TX_TUNNEL_GRE      | \
                                      DP_PACKET_OL_TX_OUTER_IPV4      | \
                                      DP_PACKET_OL_TX_OUTER_IP_CKSUM  | \
                                      DP_PACKET_OL_TX_OUTER_UDP_CKSUM | \
@@ -143,6 +131,15 @@ enum dp_packet_offload_mask {
                                        DP_PACKET_OL_RX_IP_CKSUM_BAD)
 #define DP_PACKET_OL_RX_L4_CKSUM_MASK (DP_PACKET_OL_RX_L4_CKSUM_GOOD | \
                                        DP_PACKET_OL_RX_L4_CKSUM_BAD)
+
+/* Bit masks for the 'offloads' member of the 'dp_packet' structure. */
+enum OVS_PACKED_ENUM dp_packet_ol_mask {
+    DP_PACKET_OL_TUNNEL_GENEVE = UINT16_C(1) << 0,
+    DP_PACKET_OL_TUNNEL_VXLAN = UINT16_C(1) << 1,
+};
+
+#define DP_PACKET_OL_TUNNEL_MASK (DP_PACKET_OL_TUNNEL_GENEVE \
+                                  | DP_PACKET_OL_TUNNEL_VXLAN)
 
 /* Buffer for holding packet data.  A dp_packet is automatically reallocated
  * as necessary if it grows too large for the available memory.
@@ -178,6 +175,8 @@ struct dp_packet {
                                       or UINT16_MAX. */
     uint32_t cutlen;               /* length in bytes to cut from the end. */
     ovs_be32 packet_type;          /* Packet type as defined in OpenFlow */
+    uint32_t offloads;             /* Packet info and checksums status
+                                    * (see dp_packet_ol_mask). */
     uint16_t csum_start;           /* Position to start checksumming from. */
     uint16_t csum_offset;          /* Offset to place checksum. */
     union {
@@ -185,6 +184,9 @@ struct dp_packet {
         uint64_t data[DP_PACKET_CONTEXT_SIZE / 8];
     };
 };
+
+BUILD_ASSERT_DECL(sizeof(enum dp_packet_ol_mask)
+                  <= MEMBER_SIZEOF(struct dp_packet, offloads));
 
 #if HAVE_AF_XDP
 struct dp_packet_afxdp {
@@ -1074,6 +1076,7 @@ static inline void
 dp_packet_reset_offload(struct dp_packet *p)
 {
     *dp_packet_ol_flags_ptr(p) &= ~DP_PACKET_OL_SUPPORTED_MASK;
+    p->offloads = 0;
 }
 
 static inline bool
@@ -1165,38 +1168,6 @@ static inline bool
 dp_packet_hwol_is_outer_ipv4(const struct dp_packet *b)
 {
     return *dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_OUTER_IPV4;
-}
-
-/* Returns 'true' if packet 'b' is marked for tunnel GENEVE
- * checksum offloading. */
-static inline bool
-dp_packet_hwol_is_tunnel_geneve(struct dp_packet *b)
-{
-    return !!(*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_TUNNEL_GENEVE);
-}
-
-/* Returns 'true' if packet 'b' is marked for tunnel VXLAN
- * checksum offloading. */
-static inline bool
-dp_packet_hwol_is_tunnel_vxlan(struct dp_packet *b)
-{
-    return !!(*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_TUNNEL_VXLAN);
-}
-
-/* Returns 'true' if packet 'b' is marked for GRE tunnel offloading. */
-static inline bool
-dp_packet_hwol_is_tunnel_gre(struct dp_packet *b)
-{
-    return !!(*dp_packet_ol_flags_ptr(b) & DP_PACKET_OL_TX_TUNNEL_GRE);
-}
-
-/* Returns true if packet 'b' has any offloadable tunnel type. */
-static inline bool
-dp_packet_hwol_is_tunnel(struct dp_packet *b)
-{
-    return !!(*dp_packet_ol_flags_ptr(b) & (DP_PACKET_OL_TX_TUNNEL_VXLAN |
-                                            DP_PACKET_OL_TX_TUNNEL_GRE |
-                                            DP_PACKET_OL_TX_TUNNEL_GENEVE));
 }
 
 /* Returns 'true' if packet 'b' is marked for outer IPv4 checksum offload. */
@@ -1301,27 +1272,6 @@ static inline void
 dp_packet_hwol_set_tcp_seg(struct dp_packet *b)
 {
     *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_TCP_SEG;
-}
-
-/* Mark packet 'b' for tunnel GENEVE offloading. */
-static inline void
-dp_packet_hwol_set_tunnel_geneve(struct dp_packet *b)
-{
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_TUNNEL_GENEVE;
-}
-
-/* Mark packet 'b' for tunnel VXLAN offloading. */
-static inline void
-dp_packet_hwol_set_tunnel_vxlan(struct dp_packet *b)
-{
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_TUNNEL_VXLAN;
-}
-
-/* Mark packet 'b' for GRE tunnel offloading. */
-static inline void
-dp_packet_hwol_set_tunnel_gre(struct dp_packet *b)
-{
-    *dp_packet_ol_flags_ptr(b) |= DP_PACKET_OL_TX_TUNNEL_GRE;
 }
 
 /* Mark packet 'b' as a tunnel packet with outer IPv4 header. */
@@ -1519,12 +1469,60 @@ dp_packet_ol_l4_csum_check_partial(struct dp_packet *p)
     }
 }
 
+static inline bool OVS_WARN_UNUSED_RESULT
+dp_packet_tunnel_is_geneve(const struct dp_packet *b)
+{
+    return (b->offloads & DP_PACKET_OL_TUNNEL_MASK)
+            == DP_PACKET_OL_TUNNEL_GENEVE;
+}
+
+static inline void
+dp_packet_set_tunnel_geneve(struct dp_packet *b)
+{
+    b->offloads &= ~DP_PACKET_OL_TUNNEL_MASK;
+    b->offloads |= DP_PACKET_OL_TUNNEL_GENEVE;
+}
+
+static inline bool OVS_WARN_UNUSED_RESULT
+dp_packet_tunnel_is_vxlan(const struct dp_packet *b)
+{
+    return (b->offloads & DP_PACKET_OL_TUNNEL_MASK)
+            == DP_PACKET_OL_TUNNEL_VXLAN;
+}
+
+static inline void
+dp_packet_set_tunnel_vxlan(struct dp_packet *b)
+{
+    b->offloads &= ~DP_PACKET_OL_TUNNEL_MASK;
+    b->offloads |= DP_PACKET_OL_TUNNEL_VXLAN;
+}
+
+static inline bool OVS_WARN_UNUSED_RESULT
+dp_packet_tunnel_is_gre(const struct dp_packet *b)
+{
+    return (b->offloads & DP_PACKET_OL_TUNNEL_MASK)
+            == DP_PACKET_OL_TUNNEL_MASK;
+}
+
+static inline void
+dp_packet_set_tunnel_gre(struct dp_packet *b)
+{
+    b->offloads |= DP_PACKET_OL_TUNNEL_MASK;
+}
+
+static inline bool OVS_WARN_UNUSED_RESULT
+dp_packet_is_tunnel(const struct dp_packet *b)
+{
+    return !!(b->offloads & DP_PACKET_OL_TUNNEL_MASK);
+}
+
 static inline void
 dp_packet_reset_packet(struct dp_packet *b, int off)
 {
     dp_packet_set_size(b, dp_packet_size(b) - off);
     dp_packet_set_data(b, ((unsigned char *) dp_packet_data(b) + off));
     dp_packet_reset_offsets(b);
+    b->offloads = 0;
 
     if (b->csum_start >= off && b->csum_offset) {
         /* Adjust values for decapsulation. */

@@ -60,6 +60,7 @@ dp_packet_gso_seg_new(const struct dp_packet *p, size_t hdr_len,
      * buffer and indirect buffer flags. */
     *dp_packet_ol_flags_ptr(seg) = *dp_packet_ol_flags_ptr(p)
         & DP_PACKET_OL_SUPPORTED_MASK;
+    seg->offloads = p->offloads;
 
     /* Resets TCP Segmentation in packet 'p' and adjust flags to indicate
      * L3 and L4 checksumming is now required. */
@@ -73,14 +74,14 @@ dp_packet_gso_seg_new(const struct dp_packet *p, size_t hdr_len,
         ol_flags |= DP_PACKET_OL_TX_IP_CKSUM;
     }
 
-    if (ol_flags & (DP_PACKET_OL_TX_TUNNEL_VXLAN |
-                    DP_PACKET_OL_TX_TUNNEL_GENEVE)) {
+    if (dp_packet_tunnel_is_geneve(p)
+        || dp_packet_tunnel_is_vxlan(p)) {
         if (ol_flags & DP_PACKET_OL_TX_OUTER_IPV4) {
             ol_flags |= DP_PACKET_OL_TX_OUTER_IP_CKSUM;
         }
         ol_flags |= DP_PACKET_OL_TX_OUTER_UDP_CKSUM;
-    } else if (ol_flags & DP_PACKET_OL_TX_TUNNEL_GRE &&
-               ol_flags & DP_PACKET_OL_TX_OUTER_IPV4) {
+    } else if (dp_packet_tunnel_is_gre(p)
+               && ol_flags & DP_PACKET_OL_TX_OUTER_IPV4) {
         ol_flags |= DP_PACKET_OL_TX_OUTER_IP_CKSUM;
     }
 
@@ -97,7 +98,7 @@ dp_packet_gso_nr_segs(struct dp_packet *p)
     const char *data_tail;
     const char *data_pos;
 
-    if (dp_packet_hwol_is_tunnel(p)) {
+    if (dp_packet_is_tunnel(p)) {
         data_pos = dp_packet_get_inner_tcp_payload(p);
     } else {
         data_pos = dp_packet_get_tcp_payload(p);
@@ -128,9 +129,9 @@ dp_packet_gso(struct dp_packet *p, struct dp_packet_batch **batches)
     bool outer_ipv4;
     int hdr_len;
     int seg_len;
-    bool udp_tnl = dp_packet_hwol_is_tunnel_vxlan(p) ||
-                   dp_packet_hwol_is_tunnel_geneve(p);
-    bool gre_tnl = dp_packet_hwol_is_tunnel_gre(p);
+    bool udp_tnl = dp_packet_tunnel_is_vxlan(p) ||
+                   dp_packet_tunnel_is_geneve(p);
+    bool gre_tnl = dp_packet_tunnel_is_gre(p);
 
     tso_segsz = dp_packet_get_tso_segsz(p);
     if (!tso_segsz) {

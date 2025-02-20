@@ -7199,8 +7199,8 @@ netdev_linux_prepend_vnet_hdr(struct dp_packet *b, int mtu)
 
     bool l4_is_good = dp_packet_l4_checksum_good(b);
 
-    if ((dp_packet_hwol_is_tunnel_vxlan(b) ||
-         dp_packet_hwol_is_tunnel_geneve(b)) &&
+    if ((dp_packet_tunnel_is_vxlan(b) ||
+         dp_packet_tunnel_is_geneve(b)) &&
         dp_packet_hwol_tx_l4_checksum(b)) {
         /* This condition is needed because dp-packet doesn't currently track
          * outer and inner checksum statuses seperately. In the case of these

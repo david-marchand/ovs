@@ -196,7 +196,7 @@ dp_packet_clone_with_headroom(const struct dp_packet *buffer, size_t headroom)
                                                     dp_packet_size(buffer),
                                                     headroom);
     /* Copy the following fields into the returned buffer: l2_pad_size,
-     * l2_5_ofs, l3_ofs, l4_ofs, cutlen, packet_type and md. */
+     * l2_5_ofs, l3_ofs, l4_ofs, cutlen, packet_type, offloads and md. */
     memcpy(&new_buffer->l2_pad_size, &buffer->l2_pad_size,
             sizeof(struct dp_packet) -
             offsetof(struct dp_packet, l2_pad_size));
@@ -564,7 +564,7 @@ dp_packet_ol_send_prepare(struct dp_packet *p, uint64_t flags)
         return;
     }
 
-    if (!dp_packet_hwol_is_tunnel(p)) {
+    if (!dp_packet_is_tunnel(p)) {
         if (dp_packet_hwol_tx_ip_csum(p)) {
             if (dp_packet_ip_checksum_good(p)) {
                 dp_packet_hwol_reset_tx_ip_csum(p);
@@ -602,8 +602,8 @@ dp_packet_ol_send_prepare(struct dp_packet *p, uint64_t flags)
         return;
     }
 
-    if (dp_packet_hwol_is_tunnel_geneve(p) ||
-        dp_packet_hwol_is_tunnel_vxlan(p)) {
+    if (dp_packet_tunnel_is_geneve(p) ||
+        dp_packet_tunnel_is_vxlan(p)) {
 
         /* If the TX interface doesn't support UDP tunnel offload but does
          * support inner checksum offload and an outer UDP checksum is

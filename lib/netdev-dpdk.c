@@ -2642,8 +2642,7 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
     const uint64_t all_inner_marks = (RTE_MBUF_F_TX_IPV4 |
                                       RTE_MBUF_F_TX_IPV6);
     const uint64_t all_outer_marks = (RTE_MBUF_F_TX_OUTER_IPV4 |
-                                      RTE_MBUF_F_TX_OUTER_IPV6 |
-                                      RTE_MBUF_F_TX_TUNNEL_MASK);
+                                      RTE_MBUF_F_TX_OUTER_IPV6);
     const uint64_t all_marks = all_inner_marks | all_outer_marks;
 
     if (!(mbuf->ol_flags & all_requests)) {
@@ -2661,24 +2660,22 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
         return true;
     }
 
-    const uint64_t tunnel_type = mbuf->ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK;
-    if (OVS_UNLIKELY(tunnel_type &&
-                     tunnel_type != RTE_MBUF_F_TX_TUNNEL_GENEVE &&
-                     tunnel_type != RTE_MBUF_F_TX_TUNNEL_GRE &&
-                     tunnel_type != RTE_MBUF_F_TX_TUNNEL_VXLAN)) {
-        VLOG_WARN_RL(&rl, "%s: Unexpected tunnel type: %#"PRIx64,
-                     netdev_get_name(&dev->up), tunnel_type);
-        netdev_dpdk_mbuf_dump(netdev_get_name(&dev->up),
-                              "Packet with unexpected tunnel type", mbuf);
-        return false;
-    }
-
-    if (tunnel_type && (mbuf->ol_flags & all_inner_requests)) {
+    if (dp_packet_is_tunnel(pkt)
+        && (mbuf->ol_flags & all_inner_requests)) {
         if (mbuf->ol_flags & all_outer_requests) {
             mbuf->outer_l2_len = (char *) dp_packet_l3(pkt) -
                                  (char *) dp_packet_eth(pkt);
             mbuf->outer_l3_len = (char *) dp_packet_l4(pkt) -
                                  (char *) dp_packet_l3(pkt);
+
+            if (dp_packet_tunnel_is_geneve(pkt)) {
+                mbuf->ol_flags |= RTE_MBUF_F_TX_TUNNEL_GENEVE;
+            } else if (dp_packet_tunnel_is_vxlan(pkt)) {
+                mbuf->ol_flags |= RTE_MBUF_F_TX_TUNNEL_VXLAN;
+            } else {
+                ovs_assert(dp_packet_tunnel_is_gre(pkt));
+                mbuf->ol_flags |= RTE_MBUF_F_TX_TUNNEL_GRE;
+            }
 
             /* Inner L2 length must account for the tunnel header length. */
             l2 = dp_packet_l4(pkt);
@@ -2696,7 +2693,7 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
             l4 = dp_packet_inner_l4(pkt);
         }
     } else {
-        if (tunnel_type) {
+        if (dp_packet_is_tunnel(pkt)) {
             /* No inner offload is requested, fallback to non tunnel
              * checksum offloads. */
             mbuf->ol_flags &= ~all_inner_marks;
@@ -2730,7 +2727,7 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
         int hdr_len;
 
         mbuf->l4_len = TCP_OFFSET(th->tcp_ctl) * 4;
-        if (tunnel_type) {
+        if (dp_packet_is_tunnel(pkt)) {
             link_tso_segsz = dev->mtu - mbuf->l2_len - mbuf->l3_len -
                              mbuf->l4_len - mbuf->outer_l3_len;
         } else {
