@@ -38,6 +38,7 @@ dp_packet_gso_seg_new(const struct dp_packet *p, size_t hdr_len,
 {
     struct dp_packet *seg = dp_packet_new_with_headroom(hdr_len + data_len,
                                                         dp_packet_headroom(p));
+    uint64_t ol_flags;
 
     /* Append the original packet headers and then the payload. */
     dp_packet_put(seg, dp_packet_data(p), hdr_len);
@@ -60,7 +61,30 @@ dp_packet_gso_seg_new(const struct dp_packet *p, size_t hdr_len,
     *dp_packet_ol_flags_ptr(seg) = *dp_packet_ol_flags_ptr(p)
         & DP_PACKET_OL_SUPPORTED_MASK;
 
-    dp_packet_hwol_reset_tcp_seg(seg);
+    /* Resets TCP Segmentation in packet 'p' and adjust flags to indicate
+     * L3 and L4 checksumming is now required. */
+    ol_flags = *dp_packet_ol_flags_ptr(seg) | DP_PACKET_OL_TX_TCP_CKSUM;
+
+    ol_flags &= ~(DP_PACKET_OL_TX_TCP_SEG
+                  | DP_PACKET_OL_RX_L4_CKSUM_GOOD
+                  | DP_PACKET_OL_RX_IP_CKSUM_GOOD);
+
+    if (ol_flags & DP_PACKET_OL_TX_IPV4) {
+        ol_flags |= DP_PACKET_OL_TX_IP_CKSUM;
+    }
+
+    if (ol_flags & (DP_PACKET_OL_TX_TUNNEL_VXLAN |
+                    DP_PACKET_OL_TX_TUNNEL_GENEVE)) {
+        if (ol_flags & DP_PACKET_OL_TX_OUTER_IPV4) {
+            ol_flags |= DP_PACKET_OL_TX_OUTER_IP_CKSUM;
+        }
+        ol_flags |= DP_PACKET_OL_TX_OUTER_UDP_CKSUM;
+    } else if (ol_flags & DP_PACKET_OL_TX_TUNNEL_GRE &&
+               ol_flags & DP_PACKET_OL_TX_OUTER_IPV4) {
+        ol_flags |= DP_PACKET_OL_TX_OUTER_IP_CKSUM;
+    }
+
+    *dp_packet_ol_flags_ptr(seg) = ol_flags;
 
     return seg;
 }
