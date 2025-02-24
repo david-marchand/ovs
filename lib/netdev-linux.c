@@ -89,6 +89,7 @@ COVERAGE_DEFINE(netdev_get_hwaddr);
 COVERAGE_DEFINE(netdev_set_hwaddr);
 COVERAGE_DEFINE(netdev_get_ethtool);
 COVERAGE_DEFINE(netdev_set_ethtool);
+COVERAGE_DEFINE(netdev_linux_unknown_l4_csum);
 
 
 #ifndef IFLA_IF_NETNSID
@@ -7038,6 +7039,70 @@ af_packet_sock(void)
     return sock;
 }
 
+static int
+netdev_linux_parse_packet(struct dp_packet *b, uint16_t *l2_len,
+                          uint16_t *l3_len, uint16_t *l4proto)
+{
+    struct eth_header *eth_hdr;
+    ovs_be16 eth_type;
+
+    eth_hdr = dp_packet_at(b, 0, ETH_HEADER_LEN);
+    if (!eth_hdr) {
+        return -EINVAL;
+    }
+
+    *l2_len = ETH_HEADER_LEN;
+    eth_type = eth_hdr->eth_type;
+    if (eth_type_vlan(eth_type)) {
+        struct vlan_header *vlan = dp_packet_at(b, *l2_len, VLAN_HEADER_LEN);
+
+        if (!vlan) {
+            return -EINVAL;
+        }
+
+        eth_type = vlan->vlan_next_type;
+        *l2_len += VLAN_HEADER_LEN;
+    }
+
+    if (eth_type == htons(ETH_TYPE_IP)) {
+        struct ip_header *ip_hdr = dp_packet_at(b, *l2_len, IP_HEADER_LEN);
+
+        if (!ip_hdr) {
+            return -EINVAL;
+        }
+
+        *l3_len = IP_IHL(ip_hdr->ip_ihl_ver) * 4;
+        *l4proto = ip_hdr->ip_proto;
+        dp_packet_hwol_set_tx_ipv4(b);
+    } else if (eth_type == htons(ETH_TYPE_IPV6)) {
+        struct ovs_16aligned_ip6_hdr *nh6;
+        const void *data;
+        uint8_t nw_proto;
+        uint8_t nw_frag;
+        size_t size;
+
+        nh6 = dp_packet_at(b, *l2_len, IPV6_HEADER_LEN);
+        if (!nh6) {
+            return -EINVAL;
+        }
+
+        nw_proto = nh6->ip6_ctlun.ip6_un1.ip6_un1_nxt;
+        data = (const char *) nh6 + sizeof *nh6;
+        size = (const char *) dp_packet_tail(b) - (const char *) data;
+        if (!parse_ipv6_ext_hdrs(&data, &size, &nw_proto, &nw_frag,
+                                 NULL, NULL)) {
+            return -EINVAL;
+        }
+        *l3_len = (const char *) data - (const char *) nh6;
+        *l4proto = nw_proto;
+        dp_packet_hwol_set_tx_ipv6(b);
+    } else {
+        *l3_len = *l4proto = 0;
+    }
+
+    return 0;
+}
+
 /* Initializes packet 'b' with features enabled in the prepended
  * struct virtio_net_hdr.  Returns 0 if successful, otherwise a
  * positive errno value. */
@@ -7055,16 +7120,44 @@ netdev_linux_parse_vnet_hdr(struct dp_packet *b)
     }
 
     if (vnet->flags == VIRTIO_NET_HDR_F_NEEDS_CSUM) {
-        /* The packet has offloaded checksum. However, there is no
-         * additional information like the protocol used, so it would
-         * require to parse the packet here. The checksum starting point
-         * and offset are going to be verified when the packet headers
-         * are parsed during miniflow extraction. */
-        b->csum_start = (OVS_FORCE uint16_t) vnet->csum_start;
-        b->csum_offset = (OVS_FORCE uint16_t) vnet->csum_offset;
-    } else {
-        b->csum_start = 0;
-        b->csum_offset = 0;
+        uint16_t csum_offset = (OVS_FORCE uint16_t) vnet->csum_offset;
+        uint16_t csum_start = (OVS_FORCE uint16_t) vnet->csum_start;
+        uint16_t l4proto;
+        uint16_t l2_len;
+        uint16_t l3_len;
+
+        if (netdev_linux_parse_packet(b, &l2_len, &l3_len, &l4proto)) {
+            return EINVAL;
+        }
+
+        if (csum_start && csum_offset && csum_start == l2_len + l3_len
+            && ((csum_offset == offsetof(struct tcp_header, tcp_csum)
+                 && l4proto == IPPROTO_TCP)
+                || (csum_offset == offsetof(struct udp_header, udp_csum)
+                    && l4proto == IPPROTO_UDP)
+                || (csum_offset == offsetof(struct sctp_header, sctp_csum)
+                    && l4proto == IPPROTO_SCTP))) {
+            dp_packet_ol_set_l4_csum_partial(b);
+        } else {
+            ovs_be16 *csum_l4;
+            void *l4;
+
+            COVERAGE_INC(netdev_linux_unknown_l4_csum);
+
+            csum_l4 = dp_packet_at(b, csum_start + csum_offset,
+                                   sizeof *csum_l4);
+            if (!csum_l4) {
+                return EINVAL;
+            }
+
+            l4 = dp_packet_at(b, csum_start, dp_packet_size(b) - csum_start);
+            *csum_l4 = csum(l4, dp_packet_size(b) - csum_start);
+
+            if (l4proto == IPPROTO_TCP || l4proto == IPPROTO_UDP
+                || l4proto == IPPROTO_SCTP) {
+                dp_packet_ol_set_l4_csum_good(b);
+            }
+        }
     }
 
     int ret = 0;
