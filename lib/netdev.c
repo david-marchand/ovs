@@ -926,10 +926,10 @@ netdev_send(struct netdev *netdev, int qid, struct dp_packet_batch *batch,
             }
         } else if (!(netdev_flags & NETDEV_TX_OFFLOAD_OUTER_UDP_CKSUM)) {
             DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
-                if (dp_packet_hwol_is_tso(packet)
-                    && (dp_packet_tunnel_vxlan(packet)
-                        || dp_packet_tunnel_geneve(packet))
-                    && dp_packet_hwol_is_outer_udp_cksum(packet)) {
+                if (dp_packet_hwol_is_tso(packet) &&
+                    (dp_packet_tunnel_vxlan(packet)
+                     || dp_packet_tunnel_geneve(packet))
+                    && dp_packet_l4_checksum_partial(packet)) {
                     return netdev_send_tso(netdev, qid, batch, concurrent_txq);
                 }
             }

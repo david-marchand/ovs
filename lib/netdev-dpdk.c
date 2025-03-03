@@ -2648,19 +2648,22 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
 {
     struct dp_packet *pkt = CONTAINER_OF(mbuf, struct dp_packet, mbuf);
     const struct ip_header *ip;
+    bool is_sctp;
     bool l3_csum;
+    bool l4_csum;
+    bool is_tcp;
+    bool is_udp;
     void *l2;
     void *l3;
     void *l4;
 
-    const uint64_t all_inner_requests = (RTE_MBUF_F_TX_L4_MASK
-                                         | RTE_MBUF_F_TX_TCP_SEG);
-    const uint64_t all_outer_requests = RTE_MBUF_F_TX_OUTER_UDP_CKSUM;
-    const uint64_t all_requests = all_inner_requests | all_outer_requests;
+    const uint64_t all_inner_requests = RTE_MBUF_F_TX_TCP_SEG;
 
     if (!dp_packet_ip_checksum_partial(pkt)
         && !dp_packet_inner_ip_checksum_partial(pkt)
-        && !(mbuf->ol_flags & all_requests)) {
+        && !dp_packet_l4_checksum_partial(pkt)
+        && !dp_packet_inner_l4_checksum_partial(pkt)
+        && !(mbuf->ol_flags & all_inner_requests)) {
 
         uint64_t unexpected = mbuf->ol_flags & RTE_MBUF_F_TX_OFFLOAD_MASK;
         if (OVS_UNLIKELY(unexpected)) {
@@ -2675,9 +2678,10 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
 
     if (dp_packet_tunnel(pkt)
         && (dp_packet_inner_ip_checksum_partial(pkt)
+            || dp_packet_inner_l4_checksum_partial(pkt)
             || (mbuf->ol_flags & all_inner_requests))) {
         if (dp_packet_ip_checksum_partial(pkt)
-            || (mbuf->ol_flags & all_outer_requests)) {
+            || dp_packet_l4_checksum_partial(pkt)) {
             mbuf->outer_l2_len = (char *) dp_packet_l3(pkt) -
                                  (char *) dp_packet_eth(pkt);
             mbuf->outer_l3_len = (char *) dp_packet_l4(pkt) -
@@ -2696,6 +2700,11 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
                 mbuf->ol_flags |= RTE_MBUF_F_TX_OUTER_IP_CKSUM;
             }
 
+            if (dp_packet_l4_checksum_partial(pkt)) {
+                ovs_assert(dp_packet_l4_proto_udp(pkt));
+                mbuf->ol_flags |= RTE_MBUF_F_TX_OUTER_UDP_CKSUM;
+            }
+
             ip = dp_packet_l3(pkt);
             mbuf->ol_flags |= IP_VER(ip->ip_ihl_ver) == 4
                               ? RTE_MBUF_F_TX_OUTER_IPV4
@@ -2706,6 +2715,10 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
             l3 = dp_packet_inner_l3(pkt);
             l3_csum = dp_packet_inner_ip_checksum_partial(pkt);
             l4 = dp_packet_inner_l4(pkt);
+            l4_csum = dp_packet_inner_l4_checksum_partial(pkt);
+            is_tcp = dp_packet_inner_l4_proto_tcp(pkt);
+            is_udp = dp_packet_inner_l4_proto_udp(pkt);
+            is_sctp = dp_packet_inner_l4_proto_sctp(pkt);
         } else {
             mbuf->outer_l2_len = 0;
             mbuf->outer_l3_len = 0;
@@ -2715,16 +2728,12 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
             l3 = dp_packet_inner_l3(pkt);
             l3_csum = dp_packet_inner_ip_checksum_partial(pkt);
             l4 = dp_packet_inner_l4(pkt);
+            l4_csum = dp_packet_inner_l4_checksum_partial(pkt);
+            is_tcp = dp_packet_inner_l4_proto_tcp(pkt);
+            is_udp = dp_packet_inner_l4_proto_udp(pkt);
+            is_sctp = dp_packet_inner_l4_proto_sctp(pkt);
         }
     } else {
-        if (dp_packet_tunnel(pkt)) {
-            /* No inner offload is requested, fallback to non tunnel
-             * checksum offloads. */
-            if (mbuf->ol_flags & RTE_MBUF_F_TX_OUTER_UDP_CKSUM) {
-                mbuf->ol_flags |= RTE_MBUF_F_TX_UDP_CKSUM;
-            }
-            mbuf->ol_flags &= ~all_outer_requests;
-        }
         mbuf->outer_l2_len = 0;
         mbuf->outer_l3_len = 0;
 
@@ -2732,6 +2741,10 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
         l3 = dp_packet_l3(pkt);
         l3_csum = dp_packet_ip_checksum_partial(pkt);
         l4 = dp_packet_l4(pkt);
+        l4_csum = dp_packet_l4_checksum_partial(pkt);
+        is_tcp = dp_packet_l4_proto_tcp(pkt);
+        is_udp = dp_packet_l4_proto_udp(pkt);
+        is_sctp = dp_packet_l4_proto_sctp(pkt);
     }
 
     ovs_assert(l4);
@@ -2742,6 +2755,17 @@ netdev_dpdk_prep_hwol_packet(struct netdev_dpdk *dev, struct rte_mbuf *mbuf)
 
     if (l3_csum) {
         mbuf->ol_flags |= RTE_MBUF_F_TX_IP_CKSUM;
+    }
+
+    if (l4_csum) {
+        if (is_tcp) {
+            mbuf->ol_flags |= RTE_MBUF_F_TX_TCP_CKSUM;
+        } else if (is_udp) {
+            mbuf->ol_flags |= RTE_MBUF_F_TX_UDP_CKSUM;
+        } else {
+            ovs_assert(is_sctp);
+            mbuf->ol_flags |= RTE_MBUF_F_TX_SCTP_CKSUM;
+        }
     }
 
     mbuf->l2_len = (char *) l3 - (char *) l2;
