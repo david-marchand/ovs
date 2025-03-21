@@ -35,6 +35,7 @@
 #include <rte_errno.h>
 #include <rte_ethdev.h>
 #include <rte_flow.h>
+#include <rte_gro.h>
 #include <rte_malloc.h>
 #include <rte_mbuf.h>
 #include <rte_meter.h>
@@ -503,6 +504,7 @@ struct netdev_dpdk {
         bool vhost_reconfigured;
 
         atomic_uint8_t vhost_tx_retries_max;
+        atomic_bool gro_enabled;
 
         /* Flags for virtio features recovery mechanism. */
         uint8_t virtio_features_state;
@@ -2511,9 +2513,10 @@ netdev_dpdk_vhost_client_set_config(struct netdev *netdev,
                                     char **errp OVS_UNUSED)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
-    const char *path;
     int max_tx_retries, cur_max_tx_retries;
+    bool gro_enabled, cur_gro_enabled;
     uint32_t max_queue_pairs;
+    const char *path;
 
     ovs_mutex_lock(&dev->mutex);
     if (!(dev->vhost_driver_flags & RTE_VHOST_USER_CLIENT)) {
@@ -2532,6 +2535,13 @@ netdev_dpdk_vhost_client_set_config(struct netdev *netdev,
 
             netdev_request_reconfigure(netdev);
         }
+    }
+
+    gro_enabled = smap_get_bool(args, "gro-on-tx", false);
+    atomic_read_relaxed(&dev->gro_enabled, &cur_gro_enabled);
+    if (gro_enabled != cur_gro_enabled) {
+        VLOG_INFO("%sabled GRO on '%s'", gro_enabled ? "En" : "Dis", netdev_get_name(netdev));
+        atomic_store_relaxed(&dev->gro_enabled, gro_enabled);
     }
 
     max_tx_retries = smap_get_int(args, "tx-retries-max",
@@ -3322,15 +3332,16 @@ netdev_dpdk_vhost_send(struct netdev *netdev, int qid,
     int vid = netdev_dpdk_get_vid(dev);
     struct netdev_dpdk_sw_stats stats;
     struct rte_mbuf **pkts;
+    bool gro_enabled;
     int dropped;
     int retries;
 
-    batch_cnt = cnt = dp_packet_batch_size(batch);
+    atomic_read_relaxed(&dev->gro_enabled, &gro_enabled);
     qid = dev->tx_q[qid % netdev->n_txq].map;
     if (OVS_UNLIKELY(vid < 0 || !dev->vhost_reconfigured || qid < 0
                      || !(dev->flags & NETDEV_UP))) {
         rte_spinlock_lock(&dev->stats_lock);
-        dev->stats.tx_dropped += cnt;
+        dev->stats.tx_dropped += dp_packet_batch_size(batch);
         rte_spinlock_unlock(&dev->stats_lock);
         dp_packet_delete_batch(batch, true);
         return 0;
@@ -3341,6 +3352,68 @@ netdev_dpdk_vhost_send(struct netdev *netdev, int qid,
         rte_spinlock_lock(&dev->tx_q[qid].tx_lock);
     }
 
+    if (OVS_UNLIKELY(userspace_tso_enabled() && gro_enabled)) {
+        unsigned int gro_count;
+        struct ip_header *ip;
+        struct dp_packet *p;
+
+        DP_PACKET_BATCH_FOR_EACH (i, p, batch) {
+            if (p->source != DPBUF_DPDK) {
+                goto no_dpdk_gro;
+            }
+        }
+
+        gro_count = 0;
+        DP_PACKET_BATCH_FOR_EACH (i, p, batch) {
+            struct tcp_header *th;
+
+            if (dp_packet_tunnel(p) || !dp_packet_l4(p)
+                || !dp_packet_l4_proto_tcp(p) || dp_packet_get_tso_segsz(p)) {
+                /* Reset packet_type, in case some DPDK driver set it. */
+                p->mbuf.packet_type = 0;
+                continue;
+            }
+            ip = dp_packet_l3(p);
+            if (IP_VER(ip->ip_ihl_ver) != 4
+                || IP_IS_FRAGMENT(ip->ip_frag_off)) {
+                /* Reset packet_type, in case some DPDK driver set it. */
+                p->mbuf.packet_type = 0;
+                continue;
+            }
+            p->mbuf.l2_len = (char *)dp_packet_l3(p) - (char *)dp_packet_eth(p);
+            p->mbuf.l3_len = (char *)dp_packet_l4(p) - (char *)dp_packet_l3(p);
+            th = dp_packet_l4(p);
+            p->mbuf.l4_len = TCP_OFFSET(th->tcp_ctl) * 4;
+            p->mbuf.packet_type = RTE_PTYPE_L3_IPV4 | RTE_PTYPE_L4_TCP;
+            gro_count++;
+        }
+        if (gro_count) {
+            struct rte_gro_param param = {
+                .gro_types = RTE_GRO_TCP_IPV4,
+                .max_flow_num = RTE_GRO_MAX_BURST_ITEM_NUM / NETDEV_MAX_BURST,
+                .max_item_per_flow = NETDEV_MAX_BURST,
+            };
+
+            pkts = (struct rte_mbuf **) batch->packets;
+            batch->count = rte_gro_reassemble_burst(pkts, batch->count, &param);
+            DP_PACKET_BATCH_FOR_EACH (i, p, batch) {
+                if (!p->mbuf.packet_type) {
+                    continue;
+                }
+                dp_packet_ip_checksum_set_partial(p);
+                dp_packet_l4_checksum_set_partial(p);
+                if (p->mbuf.pkt_len > dev->max_packet_len) {
+                    dp_packet_set_tso_segsz(p, dev->mtu - p->mbuf.l3_len
+                                            - p->mbuf.l4_len);
+                }
+                p->mbuf.packet_type = 0;
+                p->mbuf.l2_len = p->mbuf.l3_len = p->mbuf.l4_len = 0;
+            }
+        }
+    }
+
+no_dpdk_gro:
+    batch_cnt = dp_packet_batch_size(batch);
     cnt = netdev_dpdk_common_send(netdev, batch, &stats);
     dropped = batch_cnt - cnt;
 
