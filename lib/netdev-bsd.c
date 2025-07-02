@@ -92,6 +92,7 @@ struct netdev_bsd {
     struct eth_addr etheraddr;
     int mtu;
     int carrier;
+    bool full_duplex;   /* Cached value, see netdev_bsd_get_features(). */
 
     int tap_fd;         /* TAP character device, if any, otherwise -1. */
 
@@ -1107,10 +1108,11 @@ netdev_bsd_parse_media(int media)
  * passed-in values are set to 0.
  */
 static int
-netdev_bsd_get_features(const struct netdev *netdev,
+netdev_bsd_get_features(const struct netdev *netdev_,
                         enum netdev_features *current, uint32_t *advertised,
                         enum netdev_features *supported, uint32_t *peer)
 {
+    struct netdev_bsd *netdev = netdev_bsd_cast(netdev_);
     struct ifmediareq ifmr;
     int *media_list;
     int i;
@@ -1120,7 +1122,7 @@ netdev_bsd_get_features(const struct netdev *netdev,
     /* XXX Look into SIOCGIFCAP instead of SIOCGIFMEDIA */
 
     memset(&ifmr, 0, sizeof(ifmr));
-    ovs_strlcpy(ifmr.ifm_name, netdev_get_name(netdev), sizeof ifmr.ifm_name);
+    ovs_strlcpy(ifmr.ifm_name, netdev_get_name(netdev_), sizeof ifmr.ifm_name);
 
     /* We make two SIOCGIFMEDIA ioctl calls.  The first to determine the
      * number of supported modes, and a second with a buffer to retrieve
@@ -1128,7 +1130,7 @@ netdev_bsd_get_features(const struct netdev *netdev,
     error = af_inet_ioctl(SIOCGIFMEDIA, &ifmr);
     if (error) {
         VLOG_DBG_RL(&rl, "%s: ioctl(SIOCGIFMEDIA) failed: %s",
-                    netdev_get_name(netdev), ovs_strerror(error));
+                    netdev_get_name(netdev_), ovs_strerror(error));
         return error;
     }
 
@@ -1137,7 +1139,7 @@ netdev_bsd_get_features(const struct netdev *netdev,
 
     if (IFM_TYPE(ifmr.ifm_current) != IFM_ETHER) {
         VLOG_DBG_RL(&rl, "%s: doesn't appear to be ethernet",
-                    netdev_get_name(netdev));
+                    netdev_get_name(netdev_));
         error = EINVAL;
         goto cleanup;
     }
@@ -1145,7 +1147,7 @@ netdev_bsd_get_features(const struct netdev *netdev,
     error = af_inet_ioctl(SIOCGIFMEDIA, &ifmr);
     if (error) {
         VLOG_DBG_RL(&rl, "%s: ioctl(SIOCGIFMEDIA) failed: %s",
-                    netdev_get_name(netdev), ovs_strerror(error));
+                    netdev_get_name(netdev_), ovs_strerror(error));
         goto cleanup;
     }
 
@@ -1154,6 +1156,7 @@ netdev_bsd_get_features(const struct netdev *netdev,
     if (!*current) {
         *current = NETDEV_F_OTHER;
     }
+    netdev->full_duplex = ifmr.ifm_active & IFM_FDX;
 
     /* Advertised features. */
     *advertised = netdev_bsd_parse_media(ifmr.ifm_current);
@@ -1191,6 +1194,23 @@ netdev_bsd_get_speed(const struct netdev *netdev, uint32_t *current,
     *max = MIN(UINT32_MAX,
                netdev_features_to_bps(f_supported, 0) / 1000000ULL);
 
+    return 0;
+}
+
+static int
+netdev_bsd_get_duplex(const struct netdev *netdev_, bool *full_duplex)
+{
+    enum netdev_features f_current, f_supported, f_advertised, f_peer;
+    struct netdev_bsd *netdev = netdev_bsd_cast(netdev_);
+    int error;
+
+    error = netdev_bsd_get_features(netdev_, &f_current, &f_advertised,
+                                    &f_supported, &f_peer);
+    if (error) {
+        return error;
+    }
+
+    *full_duplex = netdev->full_duplex;
     return 0;
 }
 
@@ -1522,6 +1542,7 @@ netdev_bsd_update_flags(struct netdev *netdev_, enum netdev_flags off,
     .get_stats = netdev_bsd_get_stats,               \
     .get_features = netdev_bsd_get_features,         \
     .get_speed = netdev_bsd_get_speed,               \
+    .get_duplex = netdev_bsd_get_duplex,             \
     .set_in4 = netdev_bsd_set_in4,                   \
     .get_addr_list = netdev_bsd_get_addr_list,       \
     .get_next_hop = netdev_bsd_get_next_hop,         \

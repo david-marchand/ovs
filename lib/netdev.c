@@ -1288,14 +1288,30 @@ netdev_features_to_bps(enum netdev_features features,
                                      : default_bps);
 }
 
-/* Returns true if any of the NETDEV_F_* bits that indicate a full-duplex link
- * are set in 'features', otherwise false. */
-bool
-netdev_features_is_full_duplex(enum netdev_features features)
+int
+netdev_get_duplex(const struct netdev *netdev, bool *full_duplex)
 {
-    return (features & (NETDEV_F_10MB_FD | NETDEV_F_100MB_FD | NETDEV_F_1GB_FD
-                        | NETDEV_F_10GB_FD | NETDEV_F_40GB_FD
-                        | NETDEV_F_100GB_FD | NETDEV_F_1TB_FD)) != 0;
+    int error;
+
+    error = netdev->netdev_class->get_duplex
+            ? netdev->netdev_class->get_duplex(netdev, full_duplex)
+            : EOPNOTSUPP;
+
+    if (error == EOPNOTSUPP) {
+        enum netdev_features current;
+
+        error = netdev_get_features(netdev, &current, NULL, NULL, NULL);
+        if (!error && (current & NETDEV_F_OTHER)) {
+             error = EOPNOTSUPP;
+        }
+        if (!error) {
+            *full_duplex = (current & (NETDEV_F_10MB_FD | NETDEV_F_100MB_FD
+                                        | NETDEV_F_1GB_FD | NETDEV_F_10GB_FD
+                                        | NETDEV_F_40GB_FD | NETDEV_F_100GB_FD
+                                        | NETDEV_F_1TB_FD)) != 0;
+        }
+    }
+    return error;
 }
 
 /* Set the features advertised by 'netdev' to 'advertise'.  Returns 0 if
