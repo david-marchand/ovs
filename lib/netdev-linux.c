@@ -2680,7 +2680,7 @@ netdev_linux_read_features(struct netdev_linux *netdev)
     } else if (netdev->current_speed == 1000000) {
         netdev->current = NETDEV_F_1TB_FD;
     } else {
-        netdev->current = 0;
+        netdev->current = NETDEV_F_OTHER;
     }
 
     if (ecmd.port == PORT_TP) {
