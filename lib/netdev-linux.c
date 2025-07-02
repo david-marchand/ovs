@@ -90,6 +90,9 @@
 #ifndef SPEED_100000
 #define SPEED_100000 100000
 #endif
+#ifndef DUPLEX_UNKNOWN
+#define DUPLEX_UNKNOWN 0xff
+#endif
 
 VLOG_DEFINE_THIS_MODULE(netdev_linux);
 
@@ -2696,6 +2699,7 @@ netdev_linux_read_features(struct netdev_linux *netdev)
     } else {
         netdev->current = 0;
     }
+    netdev->current_duplex = ecmd.duplex;
 
     if (ecmd.port == PORT_TP) {
         netdev->current |= NETDEV_F_COPPER;
@@ -2777,6 +2781,32 @@ netdev_linux_get_speed(const struct netdev *netdev_, uint32_t *current,
     error = netdev_linux_get_speed_locked(netdev, current, max);
     ovs_mutex_unlock(&netdev->mutex);
     return error;
+}
+
+static int
+netdev_linux_get_duplex(const struct netdev *netdev_, bool *full_duplex)
+{
+    struct netdev_linux *netdev = netdev_linux_cast(netdev_);
+    int err;
+
+    ovs_mutex_lock(&netdev->mutex);
+
+    if (netdev_linux_netnsid_is_remote(netdev)) {
+        err = EOPNOTSUPP;
+        goto exit;
+    }
+
+    netdev_linux_read_features(netdev);
+    err = netdev->get_features_error;
+    if (!err && netdev->current_duplex == DUPLEX_UNKNOWN) {
+        err = EOPNOTSUPP;
+        goto exit;
+    }
+    *full_duplex = netdev->current_duplex == DUPLEX_FULL;
+
+exit:
+    ovs_mutex_unlock(&netdev->mutex);
+    return err;
 }
 
 /* Set the features advertised by 'netdev' to 'advertise'. */
@@ -3903,6 +3933,7 @@ const struct netdev_class netdev_linux_class = {
     .get_stats = netdev_linux_get_stats,
     .get_features = netdev_linux_get_features,
     .get_speed = netdev_linux_get_speed,
+    .get_duplex = netdev_linux_get_duplex,
     .get_status = netdev_linux_get_status,
     .get_block_id = netdev_linux_get_block_id,
     .send = netdev_linux_send,
@@ -3920,6 +3951,7 @@ const struct netdev_class netdev_tap_class = {
     .get_stats = netdev_tap_get_stats,
     .get_features = netdev_linux_get_features,
     .get_speed = netdev_linux_get_speed,
+    .get_duplex = netdev_linux_get_duplex,
     .get_status = netdev_linux_get_status,
     .send = netdev_linux_send,
     .rxq_construct = netdev_linux_rxq_construct,
