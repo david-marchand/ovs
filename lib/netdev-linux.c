@@ -80,6 +80,17 @@
 #include "userspace-tso.h"
 #include "util.h"
 
+/* For older kernels that don't define those macros in linux/ethtool.h. */
+#ifndef SPEED_UNKNOWN
+#define SPEED_UNKNOWN -1
+#endif
+#ifndef SPEED_40000
+#define SPEED_40000 40000
+#endif
+#ifndef SPEED_100000
+#define SPEED_100000 100000
+#endif
+
 VLOG_DEFINE_THIS_MODULE(netdev_linux);
 
 COVERAGE_DEFINE(netdev_set_policing);
@@ -2673,9 +2684,9 @@ netdev_linux_read_features(struct netdev_linux *netdev)
         netdev->current = ecmd.duplex ? NETDEV_F_1GB_FD : NETDEV_F_1GB_HD;
     } else if (netdev->current_speed == SPEED_10000) {
         netdev->current = NETDEV_F_10GB_FD;
-    } else if (netdev->current_speed == 40000) {
+    } else if (netdev->current_speed == SPEED_40000) {
         netdev->current = NETDEV_F_40GB_FD;
-    } else if (netdev->current_speed == 100000) {
+    } else if (netdev->current_speed == SPEED_100000) {
         netdev->current = NETDEV_F_100GB_FD;
     } else if (netdev->current_speed == 1000000) {
         netdev->current = NETDEV_F_1TB_FD;
