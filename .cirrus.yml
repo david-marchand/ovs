@@ -30,5 +30,5 @@ freebsd_build_task:
     - gmake -j8
 
   check_script:
-    - gmake -j8 check TESTSUITEFLAGS=-j8 RECHECK=yes
+    - gmake -j8 check check-kernel TESTSUITEFLAGS=-j8 RECHECK=yes
                 || { cat ./tests/testsuite.log; exit 1; }
