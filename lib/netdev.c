@@ -915,16 +915,16 @@ netdev_send(struct netdev *netdev, int qid, struct dp_packet_batch *batch,
                     return netdev_send_tso(netdev, qid, batch, concurrent_txq);
                 }
             }
-        } else if (!(netdev_flags & (NETDEV_TX_VXLAN_TNL_TSO |
-                                     NETDEV_TX_GRE_TNL_TSO |
-                                     NETDEV_TX_GENEVE_TNL_TSO))) {
+        } else if (!(netdev_flags & (NETDEV_TX_OFFLOAD_VXLAN_TNL_TSO |
+                                     NETDEV_TX_OFFLOAD_GRE_TNL_TSO |
+                                     NETDEV_TX_OFFLOAD_GENEVE_TNL_TSO))) {
             DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 if (dp_packet_get_tso_segsz(packet)
                     && dp_packet_tunnel(packet)) {
                     return netdev_send_tso(netdev, qid, batch, concurrent_txq);
                 }
             }
-        } else if (!(netdev_flags & NETDEV_TX_OFFLOAD_OUTER_UDP_CKSUM)) {
+        } else if (!(netdev_flags & NETDEV_TX_OFFLOAD_UDP_TNL_CSUM)) {
             DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 if (dp_packet_get_tso_segsz(packet)
                     && (dp_packet_tunnel_vxlan(packet)
@@ -1473,21 +1473,12 @@ netdev_get_status(const struct netdev *netdev, struct smap *smap)
     if (netdev_get_dpif_type(netdev) &&
         strcmp(netdev_get_dpif_type(netdev), "system")) {
 
-#define OL_ADD_STAT(name, bit) \
-        smap_add(smap, "tx_" name "_offload", \
-                 netdev->ol_flags & bit ? "true" : "false");
+#define NETDEV_TX_OFFLOAD_OFFLOAD(flag, name) \
+        smap_add(smap, "tx_" #name "_offload", \
+                 netdev->ol_flags & NETDEV_TX_OFFLOAD_ ## flag ? "true" : "false");
 
-        OL_ADD_STAT("ip_csum", NETDEV_TX_OFFLOAD_IPV4_CKSUM);
-        OL_ADD_STAT("tcp_csum", NETDEV_TX_OFFLOAD_TCP_CKSUM);
-        OL_ADD_STAT("udp_csum", NETDEV_TX_OFFLOAD_UDP_CKSUM);
-        OL_ADD_STAT("sctp_csum", NETDEV_TX_OFFLOAD_SCTP_CKSUM);
-        OL_ADD_STAT("tcp_seg", NETDEV_TX_OFFLOAD_TCP_TSO);
-        OL_ADD_STAT("vxlan_tso", NETDEV_TX_VXLAN_TNL_TSO);
-        OL_ADD_STAT("gre_tso", NETDEV_TX_GRE_TNL_TSO);
-        OL_ADD_STAT("geneve_tso", NETDEV_TX_GENEVE_TNL_TSO);
-        OL_ADD_STAT("out_ip_csum", NETDEV_TX_OFFLOAD_OUTER_IP_CKSUM);
-        OL_ADD_STAT("out_udp_csum", NETDEV_TX_OFFLOAD_OUTER_UDP_CKSUM);
-#undef OL_ADD_STAT
+        NETDEV_TX_OFFLOAD_OFFLOADS()
+#undef NETDEV_TX_OFFLOAD_OFFLOAD
 
         err = 0;
     }

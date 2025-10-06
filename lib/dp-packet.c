@@ -594,7 +594,7 @@ dp_packet_ol_send_prepare(struct dp_packet *p, uint64_t flags)
          * support inner checksum offload and an outer UDP checksum is
          * required, then we can't offload inner checksum either. As that would
          * invalidate the outer checksum. */
-        if (!(flags & NETDEV_TX_OFFLOAD_OUTER_UDP_CKSUM)
+        if (!(flags & NETDEV_TX_OFFLOAD_UDP_TNL_CSUM)
             && dp_packet_l4_checksum_partial(p)) {
             flags &= ~(NETDEV_TX_OFFLOAD_TCP_CKSUM |
                        NETDEV_TX_OFFLOAD_UDP_CKSUM |
@@ -626,13 +626,13 @@ dp_packet_ol_send_prepare(struct dp_packet *p, uint64_t flags)
     }
 
     if (dp_packet_ip_checksum_partial(p)
-        && !(flags & NETDEV_TX_OFFLOAD_OUTER_IP_CKSUM)) {
+        && !(flags & NETDEV_TX_OFFLOAD_IP_TNL_CSUM)) {
         dp_packet_ip_set_header_csum(p, false);
     }
 
     if (dp_packet_l4_checksum_partial(p)) {
         ovs_assert(dp_packet_l4_proto_udp(p));
-        if (!(flags & NETDEV_TX_OFFLOAD_OUTER_UDP_CKSUM)) {
+        if (!(flags & NETDEV_TX_OFFLOAD_UDP_TNL_CSUM)) {
             packet_udp_complete_csum(p, false);
         }
     }

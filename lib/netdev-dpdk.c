@@ -401,21 +401,27 @@ struct ingress_policer {
     rte_spinlock_t policer_lock;
 };
 
-enum dpdk_hw_ol_features {
-    NETDEV_RX_CHECKSUM_OFFLOAD = 1 << 0,
-    NETDEV_RX_HW_CRC_STRIP = 1 << 1,
-    NETDEV_RX_HW_SCATTER = 1 << 2,
-    NETDEV_TX_IPV4_CKSUM_OFFLOAD = 1 << 3,
-    NETDEV_TX_TCP_CKSUM_OFFLOAD = 1 << 4,
-    NETDEV_TX_UDP_CKSUM_OFFLOAD = 1 << 5,
-    NETDEV_TX_SCTP_CKSUM_OFFLOAD = 1 << 6,
-    NETDEV_TX_TSO_OFFLOAD = 1 << 7,
-    NETDEV_TX_VXLAN_TNL_TSO_OFFLOAD = 1 << 8,
-    NETDEV_TX_GENEVE_TNL_TSO_OFFLOAD = 1 << 9,
-    NETDEV_TX_OUTER_IP_CKSUM_OFFLOAD = 1 << 10,
-    NETDEV_TX_OUTER_UDP_CKSUM_OFFLOAD = 1 << 11,
-    NETDEV_TX_GRE_TNL_TSO_OFFLOAD = 1 << 12,
+#define NETDEV_TX_OFFLOAD_OFFLOAD(flag, name) NETDEV_DPDK_OFFLOAD(TX_ ## flag)
+#define NETDEV_DPDK_OFFLOADS() \
+NETDEV_DPDK_OFFLOAD(RX_CHECKSUM_OFFLOAD) \
+NETDEV_DPDK_OFFLOAD(RX_HW_CRC_STRIP) \
+NETDEV_DPDK_OFFLOAD(RX_HW_SCATTER) \
+NETDEV_TX_OFFLOAD_OFFLOADS()
+
+#define NETDEV_DPDK_OFFLOAD(name) NETDEV_DPDK_OFFLOAD_ ## name ## _BIT,
+enum dpdk_hw_ol_features_bits {
+    NETDEV_DPDK_OFFLOADS()
 };
+#undef NETDEV_DPDK_OFFLOAD
+
+#define NETDEV_DPDK_OFFLOAD(name) \
+    NETDEV_DPDK_OFFLOAD_ ## name = 1 << NETDEV_DPDK_OFFLOAD_ ## name ## _BIT,
+enum dpdk_hw_ol_features {
+    NETDEV_DPDK_OFFLOADS()
+};
+#undef NETDEV_DPDK_OFFLOAD
+#undef NETDEV_DPDK_OFFLOADS
+#undef NETDEV_TX_OFFLOAD_OFFLOAD
 
 enum dpdk_rx_steer_flags {
     DPDK_RX_STEER_LACP = 1 << 0,
@@ -1076,26 +1082,26 @@ static void
 netdev_dpdk_update_netdev_flags(struct netdev_dpdk *dev)
     OVS_REQUIRES(dev->mutex)
 {
-    netdev_dpdk_update_netdev_flag(dev, NETDEV_TX_IPV4_CKSUM_OFFLOAD,
+    netdev_dpdk_update_netdev_flag(dev, NETDEV_DPDK_OFFLOAD_TX_IPV4_CKSUM,
                                    NETDEV_TX_OFFLOAD_IPV4_CKSUM);
-    netdev_dpdk_update_netdev_flag(dev, NETDEV_TX_TCP_CKSUM_OFFLOAD,
+    netdev_dpdk_update_netdev_flag(dev, NETDEV_DPDK_OFFLOAD_TX_TCP_CKSUM,
                                    NETDEV_TX_OFFLOAD_TCP_CKSUM);
-    netdev_dpdk_update_netdev_flag(dev, NETDEV_TX_UDP_CKSUM_OFFLOAD,
+    netdev_dpdk_update_netdev_flag(dev, NETDEV_DPDK_OFFLOAD_TX_UDP_CKSUM,
                                    NETDEV_TX_OFFLOAD_UDP_CKSUM);
-    netdev_dpdk_update_netdev_flag(dev, NETDEV_TX_SCTP_CKSUM_OFFLOAD,
+    netdev_dpdk_update_netdev_flag(dev, NETDEV_DPDK_OFFLOAD_TX_SCTP_CKSUM,
                                    NETDEV_TX_OFFLOAD_SCTP_CKSUM);
-    netdev_dpdk_update_netdev_flag(dev, NETDEV_TX_TSO_OFFLOAD,
+    netdev_dpdk_update_netdev_flag(dev, NETDEV_DPDK_OFFLOAD_TX_TCP_TSO,
                                    NETDEV_TX_OFFLOAD_TCP_TSO);
-    netdev_dpdk_update_netdev_flag(dev, NETDEV_TX_VXLAN_TNL_TSO_OFFLOAD,
-                                   NETDEV_TX_VXLAN_TNL_TSO);
-    netdev_dpdk_update_netdev_flag(dev, NETDEV_TX_GRE_TNL_TSO_OFFLOAD,
-                                   NETDEV_TX_GRE_TNL_TSO);
-    netdev_dpdk_update_netdev_flag(dev, NETDEV_TX_GENEVE_TNL_TSO_OFFLOAD,
-                                   NETDEV_TX_GENEVE_TNL_TSO);
-    netdev_dpdk_update_netdev_flag(dev, NETDEV_TX_OUTER_IP_CKSUM_OFFLOAD,
-                                   NETDEV_TX_OFFLOAD_OUTER_IP_CKSUM);
-    netdev_dpdk_update_netdev_flag(dev, NETDEV_TX_OUTER_UDP_CKSUM_OFFLOAD,
-                                   NETDEV_TX_OFFLOAD_OUTER_UDP_CKSUM);
+    netdev_dpdk_update_netdev_flag(dev, NETDEV_DPDK_OFFLOAD_TX_VXLAN_TNL_TSO,
+                                   NETDEV_TX_OFFLOAD_VXLAN_TNL_TSO);
+    netdev_dpdk_update_netdev_flag(dev, NETDEV_DPDK_OFFLOAD_TX_GRE_TNL_TSO,
+                                   NETDEV_TX_OFFLOAD_GRE_TNL_TSO);
+    netdev_dpdk_update_netdev_flag(dev, NETDEV_DPDK_OFFLOAD_TX_GENEVE_TNL_TSO,
+                                   NETDEV_TX_OFFLOAD_GENEVE_TNL_TSO);
+    netdev_dpdk_update_netdev_flag(dev, NETDEV_DPDK_OFFLOAD_TX_IP_TNL_CSUM,
+                                   NETDEV_TX_OFFLOAD_IP_TNL_CSUM);
+    netdev_dpdk_update_netdev_flag(dev, NETDEV_DPDK_OFFLOAD_TX_UDP_TNL_CSUM,
+                                   NETDEV_TX_OFFLOAD_UDP_TNL_CSUM);
 }
 
 static int
@@ -1113,59 +1119,59 @@ dpdk_eth_dev_port_config(struct netdev_dpdk *dev,
      * Setting scatter for the device is done after checking for
      * scatter support in the device capabilites. */
     if (dev->mtu > RTE_ETHER_MTU) {
-        if (dev->hw_ol_features & NETDEV_RX_HW_SCATTER) {
+        if (dev->hw_ol_features & NETDEV_DPDK_OFFLOAD_RX_HW_SCATTER) {
             conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_SCATTER;
         }
     }
 
     conf.intr_conf.lsc = dev->lsc_interrupt_mode;
 
-    if (dev->hw_ol_features & NETDEV_RX_CHECKSUM_OFFLOAD) {
+    if (dev->hw_ol_features & NETDEV_DPDK_OFFLOAD_RX_CHECKSUM_OFFLOAD) {
         conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_CHECKSUM;
     }
 
-    if (!(dev->hw_ol_features & NETDEV_RX_HW_CRC_STRIP)
+    if (!(dev->hw_ol_features & NETDEV_DPDK_OFFLOAD_RX_HW_CRC_STRIP)
         && info->rx_offload_capa & RTE_ETH_RX_OFFLOAD_KEEP_CRC) {
         conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_KEEP_CRC;
     }
 
-    if (dev->hw_ol_features & NETDEV_TX_IPV4_CKSUM_OFFLOAD) {
+    if (dev->hw_ol_features & NETDEV_DPDK_OFFLOAD_TX_IPV4_CKSUM) {
         conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM;
     }
 
-    if (dev->hw_ol_features & NETDEV_TX_TCP_CKSUM_OFFLOAD) {
+    if (dev->hw_ol_features & NETDEV_DPDK_OFFLOAD_TX_TCP_CKSUM) {
         conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_TCP_CKSUM;
     }
 
-    if (dev->hw_ol_features & NETDEV_TX_UDP_CKSUM_OFFLOAD) {
+    if (dev->hw_ol_features & NETDEV_DPDK_OFFLOAD_TX_UDP_CKSUM) {
         conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_UDP_CKSUM;
     }
 
-    if (dev->hw_ol_features & NETDEV_TX_SCTP_CKSUM_OFFLOAD) {
+    if (dev->hw_ol_features & NETDEV_DPDK_OFFLOAD_TX_SCTP_CKSUM) {
         conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_SCTP_CKSUM;
     }
 
-    if (dev->hw_ol_features & NETDEV_TX_TSO_OFFLOAD) {
+    if (dev->hw_ol_features & NETDEV_DPDK_OFFLOAD_TX_TCP_TSO) {
         conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_TCP_TSO;
     }
 
-    if (dev->hw_ol_features & NETDEV_TX_VXLAN_TNL_TSO_OFFLOAD) {
+    if (dev->hw_ol_features & NETDEV_DPDK_OFFLOAD_TX_VXLAN_TNL_TSO) {
         conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO;
     }
 
-    if (dev->hw_ol_features & NETDEV_TX_GENEVE_TNL_TSO_OFFLOAD) {
+    if (dev->hw_ol_features & NETDEV_DPDK_OFFLOAD_TX_GENEVE_TNL_TSO) {
         conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO;
     }
 
-    if (dev->hw_ol_features & NETDEV_TX_GRE_TNL_TSO_OFFLOAD) {
+    if (dev->hw_ol_features & NETDEV_DPDK_OFFLOAD_TX_GRE_TNL_TSO) {
         conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO;
     }
 
-    if (dev->hw_ol_features & NETDEV_TX_OUTER_IP_CKSUM_OFFLOAD) {
+    if (dev->hw_ol_features & NETDEV_DPDK_OFFLOAD_TX_IP_TNL_CSUM) {
         conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM;
     }
 
-    if (dev->hw_ol_features & NETDEV_TX_OUTER_UDP_CKSUM_OFFLOAD) {
+    if (dev->hw_ol_features & NETDEV_DPDK_OFFLOAD_TX_UDP_TNL_CSUM) {
         conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM;
     }
 
@@ -1338,88 +1344,88 @@ dpdk_eth_dev_init(struct netdev_dpdk *dev)
 
     if (strstr(info.driver_name, "vf") != NULL) {
         VLOG_INFO("Virtual function detected, HW_CRC_STRIP will be enabled");
-        dev->hw_ol_features |= NETDEV_RX_HW_CRC_STRIP;
+        dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_RX_HW_CRC_STRIP;
     } else {
-        dev->hw_ol_features &= ~NETDEV_RX_HW_CRC_STRIP;
+        dev->hw_ol_features &= ~NETDEV_DPDK_OFFLOAD_RX_HW_CRC_STRIP;
     }
 
     if ((info.rx_offload_capa & rx_chksm_offload_capa) !=
             rx_chksm_offload_capa) {
         VLOG_WARN("Rx checksum offload is not supported on port "
                   DPDK_PORT_ID_FMT, dev->port_id);
-        dev->hw_ol_features &= ~NETDEV_RX_CHECKSUM_OFFLOAD;
+        dev->hw_ol_features &= ~NETDEV_DPDK_OFFLOAD_RX_CHECKSUM_OFFLOAD;
     } else {
-        dev->hw_ol_features |= NETDEV_RX_CHECKSUM_OFFLOAD;
+        dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_RX_CHECKSUM_OFFLOAD;
     }
 
     if (info.rx_offload_capa & RTE_ETH_RX_OFFLOAD_SCATTER) {
-        dev->hw_ol_features |= NETDEV_RX_HW_SCATTER;
+        dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_RX_HW_SCATTER;
     } else {
         /* Do not warn on lack of scatter support */
-        dev->hw_ol_features &= ~NETDEV_RX_HW_SCATTER;
+        dev->hw_ol_features &= ~NETDEV_DPDK_OFFLOAD_RX_HW_SCATTER;
     }
 
     if (info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_IPV4_CKSUM) {
-        dev->hw_ol_features |= NETDEV_TX_IPV4_CKSUM_OFFLOAD;
+        dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_TX_IPV4_CKSUM;
     } else {
-        dev->hw_ol_features &= ~NETDEV_TX_IPV4_CKSUM_OFFLOAD;
+        dev->hw_ol_features &= ~NETDEV_DPDK_OFFLOAD_TX_IPV4_CKSUM;
     }
 
     if (info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_TCP_CKSUM) {
-        dev->hw_ol_features |= NETDEV_TX_TCP_CKSUM_OFFLOAD;
+        dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_TX_TCP_CKSUM;
     } else {
-        dev->hw_ol_features &= ~NETDEV_TX_TCP_CKSUM_OFFLOAD;
+        dev->hw_ol_features &= ~NETDEV_DPDK_OFFLOAD_TX_TCP_CKSUM;
     }
 
     if (info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_UDP_CKSUM) {
-        dev->hw_ol_features |= NETDEV_TX_UDP_CKSUM_OFFLOAD;
+        dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_TX_UDP_CKSUM;
     } else {
-        dev->hw_ol_features &= ~NETDEV_TX_UDP_CKSUM_OFFLOAD;
+        dev->hw_ol_features &= ~NETDEV_DPDK_OFFLOAD_TX_UDP_CKSUM;
     }
 
     if (info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_SCTP_CKSUM) {
-        dev->hw_ol_features |= NETDEV_TX_SCTP_CKSUM_OFFLOAD;
+        dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_TX_SCTP_CKSUM;
     } else {
-        dev->hw_ol_features &= ~NETDEV_TX_SCTP_CKSUM_OFFLOAD;
+        dev->hw_ol_features &= ~NETDEV_DPDK_OFFLOAD_TX_SCTP_CKSUM;
     }
 
     if (info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM) {
-        dev->hw_ol_features |= NETDEV_TX_OUTER_IP_CKSUM_OFFLOAD;
+        dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_TX_IP_TNL_CSUM;
     } else {
-        dev->hw_ol_features &= ~NETDEV_TX_OUTER_IP_CKSUM_OFFLOAD;
+        dev->hw_ol_features &= ~NETDEV_DPDK_OFFLOAD_TX_IP_TNL_CSUM;
     }
 
     if (info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM) {
-        dev->hw_ol_features |= NETDEV_TX_OUTER_UDP_CKSUM_OFFLOAD;
+        dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_TX_UDP_TNL_CSUM;
     } else {
-        dev->hw_ol_features &= ~NETDEV_TX_OUTER_UDP_CKSUM_OFFLOAD;
+        dev->hw_ol_features &= ~NETDEV_DPDK_OFFLOAD_TX_UDP_TNL_CSUM;
     }
 
-    dev->hw_ol_features &= ~NETDEV_TX_TSO_OFFLOAD;
+    dev->hw_ol_features &= ~NETDEV_DPDK_OFFLOAD_TX_TCP_TSO;
     if (userspace_tso_enabled()) {
         if (info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_TCP_TSO) {
-            dev->hw_ol_features |= NETDEV_TX_TSO_OFFLOAD;
+            dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_TX_TCP_TSO;
         } else {
             VLOG_WARN("%s: Tx TSO offload is not supported.",
                       netdev_get_name(&dev->up));
         }
 
         if (info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO) {
-            dev->hw_ol_features |= NETDEV_TX_VXLAN_TNL_TSO_OFFLOAD;
+            dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_TX_VXLAN_TNL_TSO;
         } else {
             VLOG_WARN("%s: Tx Vxlan tunnel TSO offload is not supported.",
                       netdev_get_name(&dev->up));
         }
 
         if (info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO) {
-            dev->hw_ol_features |= NETDEV_TX_GENEVE_TNL_TSO_OFFLOAD;
+            dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_TX_GENEVE_TNL_TSO;
         } else {
             VLOG_WARN("%s: Tx Geneve tunnel TSO offload is not supported.",
                       netdev_get_name(&dev->up));
         }
 
         if (info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO) {
-            dev->hw_ol_features |= NETDEV_TX_GRE_TNL_TSO_OFFLOAD;
+            dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_TX_GRE_TNL_TSO;
         } else {
             VLOG_WARN("%s: Tx GRE tunnel TSO offload is not supported.",
                       netdev_get_name(&dev->up));
@@ -4521,7 +4527,7 @@ netdev_dpdk_get_status(const struct netdev *netdev, struct smap *args)
     smap_add_format(args, "n_txq", "%d", netdev->n_txq);
 
     smap_add(args, "rx_csum_offload",
-             dev->hw_ol_features & NETDEV_RX_CHECKSUM_OFFLOAD
+             dev->hw_ol_features & NETDEV_DPDK_OFFLOAD_RX_CHECKSUM_OFFLOAD
              ? "true" : "false");
 
     /* Querying the DPDK library for iftype may be done in future, pending
@@ -4873,13 +4879,13 @@ new_device(int vid)
                           "vHost Device '%s'", dev->vhost_id);
             } else {
                 if (features & (1ULL << VIRTIO_NET_F_GUEST_CSUM)) {
-                    dev->hw_ol_features |= NETDEV_TX_TCP_CKSUM_OFFLOAD;
-                    dev->hw_ol_features |= NETDEV_TX_UDP_CKSUM_OFFLOAD;
-                    dev->hw_ol_features |= NETDEV_TX_SCTP_CKSUM_OFFLOAD;
+                    dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_TX_TCP_CKSUM;
+                    dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_TX_UDP_CKSUM;
+                    dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_TX_SCTP_CKSUM;
 
                     /* There is no support in virtio net to offload IPv4 csum,
                      * but the vhost library handles IPv4 csum offloading. */
-                    dev->hw_ol_features |= NETDEV_TX_IPV4_CKSUM_OFFLOAD;
+                    dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_TX_IPV4_CKSUM;
                 }
 
                 if (userspace_tso_enabled()
@@ -4888,7 +4894,7 @@ new_device(int vid)
                     if (features & (1ULL << VIRTIO_NET_F_GUEST_TSO4)
                         && features & (1ULL << VIRTIO_NET_F_GUEST_TSO6)) {
 
-                        dev->hw_ol_features |= NETDEV_TX_TSO_OFFLOAD;
+                        dev->hw_ol_features |= NETDEV_DPDK_OFFLOAD_TX_TCP_TSO;
                         VLOG_DBG("%s: TSO enabled on vhost port",
                                  netdev_get_name(&dev->up));
                     } else {
