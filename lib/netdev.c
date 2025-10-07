@@ -915,16 +915,15 @@ netdev_send(struct netdev *netdev, int qid, struct dp_packet_batch *batch,
                     return netdev_send_tso(netdev, qid, batch, concurrent_txq);
                 }
             }
-        } else if (!(netdev_flags & (NETDEV_TX_OFFLOAD_VXLAN_TNL_TSO |
-                                     NETDEV_TX_OFFLOAD_GRE_TNL_TSO |
-                                     NETDEV_TX_OFFLOAD_GENEVE_TNL_TSO))) {
+        } else if (!(netdev_flags & (NETDEV_TX_OFFLOAD_UDP_TNL_TSO |
+                                     NETDEV_TX_OFFLOAD_GRE_TNL_TSO))) {
             DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 if (dp_packet_get_tso_segsz(packet)
                     && dp_packet_tunnel(packet)) {
                     return netdev_send_tso(netdev, qid, batch, concurrent_txq);
                 }
             }
-        } else if (!(netdev_flags & NETDEV_TX_OFFLOAD_UDP_TNL_CSUM)) {
+        } else if (!(netdev_flags & NETDEV_TX_OFFLOAD_UDP_TNL_TSO_CSUM)) {
             DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 if (dp_packet_get_tso_segsz(packet)
                     && (dp_packet_tunnel_vxlan(packet)
