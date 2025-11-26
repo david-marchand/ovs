@@ -973,16 +973,16 @@ ipf_extract_frags_from_batch(struct ipf *ipf, struct dp_packet_batch *pb,
             ovs_mutex_lock(&ipf->ipf_lock);
             if (!ipf_handle_frag(ipf, pkt, dl_type, zone, now, hash_basis,
                                  &rp)) {
-                dp_packet_batch_refill(pb, pkt, pb_idx);
+                dp_packet_batch_add(pb, pkt);
             } else {
-                if (rp && !dp_packet_batch_is_full(pb)) {
-                    dp_packet_batch_refill(pb, rp->pkt, pb_idx);
+                if (rp && pb->count != NETDEV_MAX_BURST) {
+                    dp_packet_batch_add(pb, rp->pkt);
                     rp->list->reass_execute_ctx = rp->pkt;
                 }
             }
             ovs_mutex_unlock(&ipf->ipf_lock);
         } else {
-            dp_packet_batch_refill(pb, pkt, pb_idx);
+            dp_packet_batch_add(pb, pkt);
         }
     }
 }
@@ -1033,7 +1033,7 @@ ipf_send_frags_in_list(struct ipf *ipf, struct ipf_list *ipf_list,
     while (ipf_list->last_sent_idx < ipf_list->last_inuse_idx) {
         struct dp_packet *pkt
             = ipf_list->frag_list[ipf_list->last_sent_idx + 1].pkt;
-        if (!dp_packet_batch_is_full(pb)) {
+        if (pb->count != NETDEV_MAX_BURST) {
             dp_packet_batch_add(pb, pkt);
             ipf_list->last_sent_idx++;
             atomic_count_dec(&ipf->nfrag);
@@ -1066,7 +1066,6 @@ ipf_send_completed_frags(struct ipf *ipf, struct dp_packet_batch *pb,
     struct ipf_list *ipf_list;
 
     LIST_FOR_EACH_SAFE (ipf_list, list_node, &ipf->frag_complete_list) {
-
         if ((ipf_list->key.dl_type == htons(ETH_TYPE_IPV6)) != v6) {
             continue;
         }
@@ -1148,7 +1147,7 @@ ipf_execute_reass_pkts(struct ipf *ipf, struct dp_packet_batch *pb,
     LIST_FOR_EACH_SAFE (rp, rp_list_node, &ipf->reassembled_pkt_list) {
         if (!rp->list->reass_execute_ctx &&
             rp->list->key.dl_type == dl_type &&
-            !dp_packet_batch_is_full(pb)) {
+            pb->count != NETDEV_MAX_BURST) {
             dp_packet_batch_add(pb, rp->pkt);
             rp->list->reass_execute_ctx = rp->pkt;
         }
@@ -1241,7 +1240,7 @@ ipf_post_execute_reass_pkts(struct ipf *ipf,
                 free(rp);
                 rp = NULL;
             } else {
-                dp_packet_batch_refill(pb, pkt, pb_idx);
+                dp_packet_batch_add(pb, pkt);
             }
         }
     }
