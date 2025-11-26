@@ -263,8 +263,10 @@ action_autoval_generic(struct dp_packet_batch *batch, const struct nlattr *a)
             }
         }
         dp_packet_delete_batch(&test_batch, true);
+        dp_packet_batch_destroy(&test_batch);
     }
     dp_packet_delete_batch(&original_batch, true);
+    dp_packet_batch_destroy(&original_batch);
 }
 
 void

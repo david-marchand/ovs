@@ -359,7 +359,8 @@ action_stage:
 
     /* Initialize the "Action Batch" for each flow handled below. */
     struct dp_packet_batch action_batch;
-    action_batch.trunc = 0;
+
+    dp_packet_batch_init(&action_batch);
 
     while (lookup_pkts_bitmask) {
         uint32_t rule_pkt_idx = raw_ctz(lookup_pkts_bitmask);
@@ -409,6 +410,8 @@ action_stage:
         dp_netdev_batch_execute(pmd, &action_batch, rules[rule_pkt_idx],
                                 bytes, tcp_flags);
     }
+
+    dp_packet_batch_destroy(&action_batch);
 
     return 0;
 }

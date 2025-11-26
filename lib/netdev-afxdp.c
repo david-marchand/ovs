@@ -924,7 +924,7 @@ free_afxdp_buf_batch(struct dp_packet_batch *batch)
         elems[i] = (void *)addr;
     }
     umem_elem_push_n(xpacket->mpool, dp_packet_batch_size(batch), elems);
-    dp_packet_batch_init(batch);
+    dp_packet_batch_reset_metadata(batch);
 }
 
 static inline bool
