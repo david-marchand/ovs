@@ -3443,6 +3443,42 @@ AT_CHECK([ovs-pcap p3-tx.pcap | wc -l], [0], [2
 OVS_VSWITCHD_STOP
 AT_CLEANUP
 
+AT_SETUP([dpif-netdev - tso + dynamic packet batch grow])
+AT_KEYWORDS([userspace offload])
+OVS_VSWITCHD_START(
+  [set Open_vSwitch . other_config:userspace-tso-enable=true])
+add_of_ports --pcap br0 $(seq 1 2)
+
+AT_CHECK([ovs-vsctl set Interface p1 options:ol_tso_segsz=1000])
+
+AT_CHECK([ovs-ofctl add-flow br0 in_port=1,actions=output:2])
+
+AT_CHECK([ovs-appctl coverage/read-counter dp_packet_batch_grow], [0], [0
+])
+AT_CHECK([ovs-appctl coverage/read-counter dp_packet_gso], [0], [0
+])
+
+flow_s="in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:01:00),eth_type(0x0800), \
+        ipv4(src=10.0.1.1,dst=10.0.0.1,proto=6,tos=0,ttl=64,frag=no), \
+        tcp(src=1234,dst=80),tcp_flags(ack)"
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 "${flow_s}" --len 35000])
+
+dnl Interface statistics and coverage counters take some time to refresh.
+OVS_WAIT_UNTIL([test `ovs-vsctl get interface p1 statistics:rx_packets` -eq 1])
+AT_CHECK([ovs-appctl coverage/read-counter netdev_received], [0], [1
+])
+AT_CHECK([ovs-appctl coverage/read-counter dp_packet_batch_grow], [0], [1
+])
+AT_CHECK([ovs-appctl coverage/read-counter dp_packet_gso], [0], [1
+])
+AT_CHECK([ovs-appctl coverage/read-counter netdev_sent], [0], [1
+])
+AT_CHECK([ovs-vsctl get interface p2 statistics:tx_packets], [0], [35
+])
+
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
 AT_SETUP([dpif-netdev - revalidators handle dp modification fail correctly])
 OVS_VSWITCHD_START(
   [add-port br0 p1 \
