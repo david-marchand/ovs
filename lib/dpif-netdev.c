@@ -6776,13 +6776,15 @@ dp_netdev_run_meter(struct dp_netdev *dp, struct dp_packet_batch *packets_,
                     uint32_t meter_id, long long int now_ms)
 {
     const size_t cnt = dp_packet_batch_size(packets_);
-    uint32_t exceeded_rate[NETDEV_MAX_BURST];
-    uint32_t exceeded_band[NETDEV_MAX_BURST];
+    uint32_t exceeded_band__[NETDEV_MAX_BURST];
+    uint32_t exceeded_rate__[NETDEV_MAX_BURST];
     uint64_t bytes, volume, meter_used, old;
     uint64_t band_packets[MAX_BANDS];
     uint64_t band_bytes[MAX_BANDS];
     struct dp_meter_band *band;
     struct dp_packet *packet;
+    uint32_t *exceeded_band;
+    uint32_t *exceeded_rate;
     struct dp_meter *meter;
     bool exceeded = false;
 
@@ -6793,6 +6795,14 @@ dp_netdev_run_meter(struct dp_netdev *dp, struct dp_packet_batch *packets_,
     meter = dp_meter_lookup(&dp->meters, meter_id);
     if (!meter) {
         return;
+    }
+
+    if (cnt <= NETDEV_MAX_BURST) {
+        exceeded_band = exceeded_band__;
+        exceeded_rate = exceeded_rate__;
+    } else {
+        exceeded_band = xmalloc(cnt * sizeof *exceeded_band);
+        exceeded_rate = xmalloc(cnt * sizeof *exceeded_rate);
     }
 
     /* Initialize as negative values. */
@@ -6878,7 +6888,7 @@ dp_netdev_run_meter(struct dp_netdev *dp, struct dp_packet_batch *packets_,
 
     /* No need to iterate over packets if there are no drops. */
     if (!exceeded) {
-        return;
+        goto out;
     }
 
     /* Fire the highest rate band exceeded by each packet, and drop
@@ -6910,6 +6920,12 @@ dp_netdev_run_meter(struct dp_netdev *dp, struct dp_packet_batch *packets_,
         atomic_add_relaxed(&band->packet_count, band_packets[m], &old);
         atomic_add_relaxed(&band->byte_count,   band_bytes[m],   &old);
         COVERAGE_ADD(datapath_drop_meter, band_packets[m]);
+    }
+
+out:
+    if (cnt > NETDEV_MAX_BURST) {
+        free(exceeded_rate);
+        free(exceeded_band);
     }
 }
 
@@ -8218,6 +8234,26 @@ static void
 dp_netdev_recirculate(struct dp_netdev_pmd_thread *pmd,
                       struct dp_packet_batch *packets)
 {
+    if (dp_packet_batch_size(packets) > NETDEV_MAX_BURST) {
+        struct dp_packet_batch smaller_batch;
+        size_t batch_cnt;
+        size_t sent = 0;
+
+        batch_cnt = dp_packet_batch_size(packets);
+        dp_packet_batch_init(&smaller_batch);
+        do {
+            size_t count = MIN(batch_cnt - sent, NETDEV_MAX_BURST);
+
+            smaller_batch.trunc = packets->trunc;
+            smaller_batch.count = 0;
+            dp_packet_batch_add_array(&smaller_batch, &packets->packets[sent],
+                                      count);
+            dp_netdev_input__(pmd, &smaller_batch, true, 0);
+            sent += count;
+        } while (sent < batch_cnt);
+        return;
+    }
+
     dp_netdev_input__(pmd, packets, true, 0);
 }
 
@@ -8381,11 +8417,12 @@ dp_execute_output_action(struct dp_netdev_pmd_thread *pmd,
                          bool should_steal, odp_port_t port_no)
 {
     struct tx_port *p = pmd_send_port_cache_lookup(pmd, port_no);
+    size_t batch_cnt = dp_packet_batch_size(packets_);
     struct dp_packet_batch out;
+    size_t sent;
 
     if (!OVS_LIKELY(p)) {
-        COVERAGE_ADD(datapath_drop_invalid_port,
-                     dp_packet_batch_size(packets_));
+        COVERAGE_ADD(datapath_drop_invalid_port, batch_cnt);
         dp_packet_delete_batch(packets_, should_steal);
         return false;
     }
@@ -8395,21 +8432,31 @@ dp_execute_output_action(struct dp_netdev_pmd_thread *pmd,
         packets_ = &out;
     }
     dp_packet_batch_apply_cutlen(packets_);
-    if (dp_packet_batch_size(&p->output_pkts)
-        + dp_packet_batch_size(packets_) > NETDEV_MAX_BURST) {
-        /* Flush here to avoid overflow. */
+    if (dp_packet_batch_size(&p->output_pkts) == NETDEV_MAX_BURST) {
         dp_netdev_pmd_flush_output_on_port(pmd, p);
     }
     if (dp_packet_batch_is_empty(&p->output_pkts)) {
         pmd->n_output_batches++;
     }
 
-    struct dp_packet *packet;
-    DP_PACKET_BATCH_FOR_EACH (i, packet, packets_) {
-        p->output_pkts_rxqs[dp_packet_batch_size(&p->output_pkts)] =
-            pmd->ctx.last_rxq;
-        dp_packet_batch_add(&p->output_pkts, packet);
-    }
+    sent = 0;
+    do {
+        size_t count = MIN(batch_cnt - sent,
+                           NETDEV_MAX_BURST - p->output_pkts.count);
+
+        for (unsigned i = 0; i < count; i++) {
+            p->output_pkts_rxqs[p->output_pkts.count + i] =
+                pmd->ctx.last_rxq;
+        }
+        dp_packet_batch_add_array(&p->output_pkts, &packets_->packets[sent],
+                                  count);
+        sent += count;
+        if (sent != batch_cnt
+            && dp_packet_batch_size(&p->output_pkts) == NETDEV_MAX_BURST) {
+            dp_netdev_pmd_flush_output_on_port(pmd, p);
+            pmd->n_output_batches++;
+        }
+    } while (sent < batch_cnt);
     return true;
 }
 
