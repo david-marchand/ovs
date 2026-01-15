@@ -3508,7 +3508,7 @@ cat packets | while read line; do
   AT_CHECK([ovs-appctl netdev-dummy/receive p1 $line], [0], [ignore])
 done
 
-OVS_WAIT_UNTIL([test `ovs-vsctl get interface p1 statistics | grep -oP 'rx_packets=\s*\K\d+'` -ge 16000])
+OVS_WAIT_UNTIL([test `ovs-vsctl get interface p1 statistics:rx_packets` -ge 16000])
 
 OVS_VSWITCHD_STOP
 AT_CLEANUP
@@ -3535,7 +3535,7 @@ cat packets | while read line; do
   AT_CHECK([ovs-appctl netdev-dummy/receive p1 $line], [0], [ignore])
 done
 
-OVS_WAIT_UNTIL([test `ovs-vsctl get interface p1 statistics | grep -oP 'rx_packets=\s*\K\d+'` -ge 16000])
+OVS_WAIT_UNTIL([test `ovs-vsctl get interface p1 statistics:rx_packets` -ge 16000])
 
 OVS_VSWITCHD_STOP(["dnl
 /upcall: datapath reached the dynamic limit of .* flows./d"])
