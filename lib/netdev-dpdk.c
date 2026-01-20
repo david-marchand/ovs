@@ -2599,6 +2599,7 @@ netdev_dpdk_batch_init_packet_fields(struct dp_packet_batch *batch)
     struct dp_packet *packet;
 
     batch->tso_count = 0;
+    batch->tunnel_count = 0;
     DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
         /* Datapath does not support multi-segment buffers. */
         ovs_assert(packet->mbuf.nb_segs == 1);

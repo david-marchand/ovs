@@ -913,7 +913,8 @@ netdev_send(struct netdev *netdev, int qid, struct dp_packet_batch *batch,
             return netdev_send_tso(netdev, qid, batch, concurrent_txq, false);
         } else if (!(netdev_flags & (NETDEV_TX_VXLAN_TNL_TSO |
                                      NETDEV_TX_GRE_TNL_TSO |
-                                     NETDEV_TX_GENEVE_TNL_TSO))) {
+                                     NETDEV_TX_GENEVE_TNL_TSO))
+                   && dp_packet_batch_tunnel_count(batch) > 0) {
             DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 if (dp_packet_get_tso_segsz(packet)
                     && dp_packet_tunnel(packet)) {
@@ -1003,12 +1004,13 @@ netdev_push_header(const struct netdev *netdev,
 {
     struct dp_packet *packet;
     size_t i, size = dp_packet_batch_size(batch);
+    bool supported_offloads = (data->tnl_type == OVS_VPORT_TYPE_GENEVE ||
+                               data->tnl_type == OVS_VPORT_TYPE_VXLAN ||
+                               data->tnl_type == OVS_VPORT_TYPE_GRE ||
+                               data->tnl_type == OVS_VPORT_TYPE_IP6GRE);
 
     DP_PACKET_BATCH_REFILL_FOR_EACH (i, size, packet, batch) {
-        if (OVS_UNLIKELY(data->tnl_type != OVS_VPORT_TYPE_GENEVE &&
-                         data->tnl_type != OVS_VPORT_TYPE_VXLAN &&
-                         data->tnl_type != OVS_VPORT_TYPE_GRE &&
-                         data->tnl_type != OVS_VPORT_TYPE_IP6GRE &&
+        if (OVS_UNLIKELY(!supported_offloads &&
                          dp_packet_get_tso_segsz(packet))) {
             COVERAGE_INC(netdev_push_header_drops);
             dp_packet_delete(packet);
@@ -1016,10 +1018,7 @@ netdev_push_header(const struct netdev *netdev,
                               "supported for %s tunnels: packet dropped",
                          netdev_get_name(netdev), netdev_get_type(netdev));
         } else {
-            if (data->tnl_type != OVS_VPORT_TYPE_GENEVE &&
-                data->tnl_type != OVS_VPORT_TYPE_VXLAN &&
-                data->tnl_type != OVS_VPORT_TYPE_GRE &&
-                data->tnl_type != OVS_VPORT_TYPE_IP6GRE) {
+            if (!supported_offloads) {
                 dp_packet_ol_send_prepare(packet, 0);
             } else if (dp_packet_tunnel(packet)) {
                 if (dp_packet_get_tso_segsz(packet)) {
