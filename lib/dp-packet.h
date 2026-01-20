@@ -187,6 +187,7 @@ static inline void *dp_packet_eth(const struct dp_packet *);
 static inline void dp_packet_reset_outer_offsets(struct dp_packet *);
 static inline void dp_packet_reset_offsets(struct dp_packet *);
 static inline void dp_packet_reset_offload(struct dp_packet *);
+static inline bool dp_packet_tunnel(const struct dp_packet *);
 static inline uint16_t dp_packet_l2_pad_size(const struct dp_packet *);
 static inline void dp_packet_set_l2_pad_size(struct dp_packet *, uint16_t);
 static inline void *dp_packet_l2_5(const struct dp_packet *);
@@ -862,6 +863,7 @@ enum { NETDEV_MAX_BURST = 32 }; /* Maximum number packets in a batch. */
 struct dp_packet_batch {
     size_t count;
     size_t tso_count; /* Number of packets with TSO enabled. */
+    size_t tunnel_count; /* Number of packets with tunnel offload flags. */
     bool trunc; /* true if the batch needs truncate. */
     struct dp_packet **packets;
     size_t size;
@@ -874,6 +876,7 @@ dp_packet_batch_reset_metadata(struct dp_packet_batch *batch)
     batch->count = 0;
     batch->trunc = false;
     batch->tso_count = 0;
+    batch->tunnel_count = 0;
 }
 
 static inline void
@@ -895,6 +898,9 @@ dp_packet_batch_add(struct dp_packet_batch *batch, struct dp_packet *packet)
     batch->packets[batch->count++] = packet;
     if (dp_packet_get_tso_segsz(packet)) {
         batch->tso_count++;
+    }
+    if (dp_packet_tunnel(packet)) {
+        batch->tunnel_count++;
     }
 }
 
@@ -923,6 +929,7 @@ dp_packet_batch_refill_init(struct dp_packet_batch *batch)
 {
     batch->count = 0;
     batch->tso_count = 0;
+    batch->tunnel_count = 0;
 };
 
 static inline void
@@ -932,6 +939,7 @@ dp_packet_batch_init_packet(struct dp_packet_batch *batch, struct dp_packet *p)
     batch->count = 1;
     batch->packets[0] = p;
     batch->tso_count = dp_packet_get_tso_segsz(p) ? 1 : 0;
+    batch->tunnel_count = dp_packet_tunnel(p) ? 1 : 0;
 }
 
 static inline bool
@@ -944,6 +952,12 @@ static inline size_t
 dp_packet_batch_tso_count(const struct dp_packet_batch *batch)
 {
     return batch->tso_count;
+}
+
+static inline size_t
+dp_packet_batch_tunnel_count(const struct dp_packet_batch *batch)
+{
+    return batch->tunnel_count;
 }
 
 #define DP_PACKET_BATCH_FOR_EACH(IDX, PACKET, BATCH)                \

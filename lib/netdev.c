@@ -825,7 +825,8 @@ netdev_send(struct netdev *netdev, int qid, struct dp_packet_batch *batch,
             dp_packet_gso_batch(batch);
         } else if (!(netdev_flags & (NETDEV_TX_VXLAN_TNL_TSO |
                                      NETDEV_TX_GRE_TNL_TSO |
-                                     NETDEV_TX_GENEVE_TNL_TSO))) {
+                                     NETDEV_TX_GENEVE_TNL_TSO))
+                   && dp_packet_batch_tunnel_count(batch) > 0) {
             DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 if (dp_packet_get_tso_segsz(packet)
                     && dp_packet_tunnel(packet)) {
@@ -934,7 +935,7 @@ netdev_push_header(const struct netdev *netdev,
                 }
                 dp_packet_batch_add(batch, packet);
             }
-        } else {
+        } else if (dp_packet_batch_tunnel_count(batch) > 0) {
             DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 if (dp_packet_tunnel(packet) && dp_packet_get_tso_segsz(packet)) {
                     dp_packet_gso_batch(batch);
@@ -947,6 +948,9 @@ netdev_push_header(const struct netdev *netdev,
     DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
         if (!supported_offloads || dp_packet_tunnel(packet)) {
             dp_packet_ol_send_prepare(packet, 0);
+        }
+        if (!dp_packet_tunnel(packet)) {
+            batch->tunnel_count++;
         }
         netdev->netdev_class->push_header(netdev, packet, data);
         pkt_metadata_init(&packet->md, data->out_port);

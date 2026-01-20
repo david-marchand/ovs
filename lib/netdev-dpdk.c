@@ -2970,6 +2970,7 @@ netdev_dpdk_vhost_rxq_recv(struct netdev_rxq *rxq,
 
     batch->count = nb_rx;
     batch->tso_count = 0;
+    batch->tunnel_count = 0;
     netdev_dpdk_batch_init_packet_fields(batch);
 
     return 0;
