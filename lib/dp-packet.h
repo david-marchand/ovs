@@ -862,6 +862,7 @@ enum { NETDEV_MAX_BURST = 32 }; /* Maximum number packets in a batch. */
 struct dp_packet_batch {
     size_t count;
     bool trunc; /* true if the batch needs truncate. */
+    uint8_t tso_count; /* Number of packets with TSO enabled. */
     struct dp_packet *packets[NETDEV_MAX_BURST];
 };
 
@@ -870,6 +871,7 @@ dp_packet_batch_init(struct dp_packet_batch *batch)
 {
     batch->count = 0;
     batch->trunc = false;
+    batch->tso_count = 0;
 }
 
 static inline void
@@ -878,6 +880,9 @@ dp_packet_batch_add__(struct dp_packet_batch *batch,
 {
     if (batch->count < limit) {
         batch->packets[batch->count++] = packet;
+        if (dp_packet_get_tso_segsz(packet)) {
+            batch->tso_count++;
+        }
     } else {
         dp_packet_delete(packet);
     }
@@ -902,6 +907,7 @@ static inline void
 dp_packet_batch_refill_init(struct dp_packet_batch *batch)
 {
     batch->count = 0;
+    batch->tso_count = 0;
 };
 
 static inline void
@@ -917,6 +923,7 @@ dp_packet_batch_init_packet(struct dp_packet_batch *batch, struct dp_packet *p)
     dp_packet_batch_init(batch);
     batch->count = 1;
     batch->packets[0] = p;
+    batch->tso_count = dp_packet_get_tso_segsz(p) ? 1 : 0;
 }
 
 static inline bool
@@ -929,6 +936,12 @@ static inline bool
 dp_packet_batch_is_full(const struct dp_packet_batch *batch)
 {
     return dp_packet_batch_size(batch) == NETDEV_MAX_BURST;
+}
+
+static inline uint8_t
+dp_packet_batch_tso_count(const struct dp_packet_batch *batch)
+{
+    return batch->tso_count;
 }
 
 #define DP_PACKET_BATCH_FOR_EACH(IDX, PACKET, BATCH)                \

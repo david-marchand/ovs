@@ -2598,6 +2598,7 @@ netdev_dpdk_batch_init_packet_fields(struct dp_packet_batch *batch)
 {
     struct dp_packet *packet;
 
+    batch->tso_count = 0;
     DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
         /* Datapath does not support multi-segment buffers. */
         ovs_assert(packet->mbuf.nb_segs == 1);
@@ -2611,6 +2612,10 @@ netdev_dpdk_batch_init_packet_fields(struct dp_packet_batch *batch)
                                      | RTE_MBUF_F_RX_IP_CKSUM_GOOD
                                      | RTE_MBUF_F_RX_L4_CKSUM_BAD
                                      | RTE_MBUF_F_RX_L4_CKSUM_GOOD);
+
+        if (userspace_tso_enabled() && packet->mbuf.tso_segsz) {
+            batch->tso_count++;
+        }
     }
 }
 

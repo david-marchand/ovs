@@ -908,14 +908,9 @@ netdev_send(struct netdev *netdev, int qid, struct dp_packet_batch *batch,
     struct dp_packet *packet;
     int error;
 
-    if (userspace_tso_enabled()) {
+    if (dp_packet_batch_tso_count(batch) > 0) {
         if (!(netdev_flags & NETDEV_TX_OFFLOAD_TCP_TSO)) {
-            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
-                if (dp_packet_get_tso_segsz(packet)) {
-                    return netdev_send_tso(netdev, qid, batch, concurrent_txq,
-                                           false);
-                }
-            }
+            return netdev_send_tso(netdev, qid, batch, concurrent_txq, false);
         } else if (!(netdev_flags & (NETDEV_TX_VXLAN_TNL_TSO |
                                      NETDEV_TX_GRE_TNL_TSO |
                                      NETDEV_TX_GENEVE_TNL_TSO))) {
