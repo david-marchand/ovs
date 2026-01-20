@@ -245,12 +245,14 @@ first_seg:
             if (n_segs == 2) {
                 /* No need to ask HW segmentation, we already did the job. */
                 dp_packet_set_tso_segsz(p, 0);
+                batch->tso_count--;
             }
         }
     } else {
         /* Trim the first segment and reset TSO. */
         dp_packet_set_size(p, hdr_len + tso_segsz);
         dp_packet_set_tso_segsz(p, 0);
+        batch->tso_count--;
     }
     dp_packet_gso_update_segment(p, 0, n_segs, tso_segsz, udp_tnl, gre_tnl);
 }

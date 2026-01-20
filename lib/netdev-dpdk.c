@@ -2611,7 +2611,13 @@ netdev_dpdk_batch_init_packet_fields(struct dp_packet_batch *batch)
                                      | RTE_MBUF_F_RX_IP_CKSUM_GOOD
                                      | RTE_MBUF_F_RX_L4_CKSUM_BAD
                                      | RTE_MBUF_F_RX_L4_CKSUM_GOOD);
+
+        if (packet->mbuf.tso_segsz) {
+            batch->tso_count++;
+        }
     }
+
+    ovs_assert(userspace_tso_enabled() || batch->tso_count == 0);
 }
 
 /* Prepare the packet for HWOL.
@@ -2963,6 +2969,7 @@ netdev_dpdk_vhost_rxq_recv(struct netdev_rxq *rxq,
     }
 
     batch->count = nb_rx;
+    batch->tso_count = 0;
     netdev_dpdk_batch_init_packet_fields(batch);
 
     return 0;

@@ -820,14 +820,9 @@ netdev_send(struct netdev *netdev, int qid, struct dp_packet_batch *batch,
     struct dp_packet *packet;
     int error;
 
-    if (userspace_tso_enabled()) {
+    if (dp_packet_batch_tso_count(batch) > 0) {
         if (!(netdev_flags & NETDEV_TX_OFFLOAD_TCP_TSO)) {
-            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
-                if (dp_packet_get_tso_segsz(packet)) {
-                    dp_packet_gso_batch(batch);
-                    break;
-                }
-            }
+            dp_packet_gso_batch(batch);
         } else if (!(netdev_flags & (NETDEV_TX_VXLAN_TNL_TSO |
                                      NETDEV_TX_GRE_TNL_TSO |
                                      NETDEV_TX_GENEVE_TNL_TSO))) {
@@ -924,7 +919,7 @@ netdev_push_header(const struct netdev *netdev,
                               || (data->tnl_type == OVS_VPORT_TYPE_IP6GRE);
     struct dp_packet *packet;
 
-    if (userspace_tso_enabled()) {
+    if (dp_packet_batch_tso_count(batch) > 0) {
         if (OVS_UNLIKELY(!supported_offloads)) {
             size_t i, size = dp_packet_batch_size(batch);
 
