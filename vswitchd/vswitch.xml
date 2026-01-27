@@ -545,17 +545,38 @@
                                                &lt;non-empty-list&gt;
                   </li>
                   <li>
-                    &lt;user-mtus&gt; ::= &lt;mtu-all-socket&gt; |
-                                          &lt;mtu-socket-pair&gt;
+                    &lt;user-mtus&gt; ::= &lt;mtu-all&gt; |
+                                          &lt;mtu-pair&gt; |
+                                          &lt;mtu-triplet&gt;
                   </li>
                   <li>
-                    &lt;mtu-all-socket&gt; ::= &lt;mtu&gt;
+                    &lt;mtu-all&gt; ::= &lt;mtu&gt;
                   </li>
                   <li>
-                    &lt;mtu-socket-pair&gt; ::= &lt;mtu&gt; : &lt;socket-id&gt;
+                    &lt;mtu-pair&gt; ::= &lt;mtu&gt; : &lt;socket-id&gt;
+                  </li>
+                  <li>
+                    &lt;mtu-triplet&gt; ::= &lt;mtu&gt; : &lt;socket-id&gt; : &lt;mbufs&gt; |
+                                            &lt;mtu&gt; : : &lt;mbufs&gt;
                   </li>
                 </ul>
               </p>
+        <p>
+          When <code>mbufs</code> is specified, the mempool will be created with
+          exactly that count or the creation will fail. No automatic retry with
+          smaller sizes will occur. This ensures the configured capacity is
+          available.
+        </p>
+        <p>
+          Examples:
+        </p>
+        <ul>
+          <li><code>1500</code> - MTU 1500, all sockets, default mbuf count</li>
+          <li><code>1500:0</code> - MTU 1500, socket 0 only, default mbuf count</li>
+          <li><code>1500::262144</code> - MTU 1500, all sockets, exactly 256K mbufs</li>
+          <li><code>1500:0:262144</code> - MTU 1500, socket 0, exactly 256K mbufs</li>
+          <li><code>1500:0:262144,9000:1:524288</code> - Multiple configurations</li>
+        </ul>
         <p>
           Changing this value requires restarting the daemon if dpdk-init has
           already been set to true.
