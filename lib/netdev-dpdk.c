@@ -369,6 +369,7 @@ struct dpdk_mp {
      struct rte_mempool *mp;
      int mtu;
      int socket_id;
+     uint32_t n_mbufs;
      int refcount;
      struct ovs_list list_node OVS_GUARDED_BY(dpdk_mp_mutex);
 };
@@ -627,6 +628,7 @@ dpdk_buf_size(int mtu)
 struct user_mempool_config {
     int adj_mtu;
     int socket_id;
+    uint32_t n_mbufs;
 };
 
 static struct user_mempool_config *user_mempools = NULL;
@@ -634,6 +636,7 @@ static int n_user_mempools;
 
 struct mp_config {
     bool shared;
+    bool exact;
     int adj_mtu;
     int socket_id;
     uint32_t n_mbufs;
@@ -752,6 +755,8 @@ dpdk_mp_config_get(struct netdev_dpdk *dev, struct mp_config *mp_config)
                      dev->requested_mtu, dev->requested_socket_id);
         } else {
             mp_config->adj_mtu = user_config->adj_mtu;
+            mp_config->n_mbufs = user_config->n_mbufs;
+            mp_config->exact = !!mp_config->n_mbufs;
             VLOG_DBG("Found user configured shared mempool with mbufs "
                      "of size %d, suitable for port with MTU %d, NUMA %d.",
                      MTU_TO_FRAME_LEN(mp_config->adj_mtu),
@@ -765,10 +770,12 @@ dpdk_mp_config_get(struct netdev_dpdk *dev, struct mp_config *mp_config)
          * can change dynamically at runtime. For now, use this rough
          * heuristic.
          */
-        if (mp_config->adj_mtu >= RTE_ETHER_MTU) {
-            mp_config->n_mbufs = MAX_NB_MBUF;
-        } else {
-            mp_config->n_mbufs = MIN_NB_MBUF;
+        if (!mp_config->exact) {
+            if (mp_config->adj_mtu >= RTE_ETHER_MTU) {
+                mp_config->n_mbufs = MAX_NB_MBUF;
+            } else {
+                mp_config->n_mbufs = MIN_NB_MBUF;
+            }
         }
     } else {
         /* Per port memory is being used.
@@ -791,7 +798,6 @@ dpdk_mp_create(struct netdev_dpdk *dev, struct mp_config *mp_config)
 {
     char mp_name[RTE_MEMPOOL_NAMESIZE];
     const char *netdev_name = netdev_get_name(&dev->up);
-    uint32_t n_mbufs = 0;
     uint32_t mbuf_size = 0;
     uint32_t aligned_mbuf_size = 0;
     uint32_t mbuf_priv_data_len = 0;
@@ -811,7 +817,7 @@ dpdk_mp_create(struct netdev_dpdk *dev, struct mp_config *mp_config)
     /* Get the size of each mbuf, based on the MTU */
     mbuf_size = MTU_TO_FRAME_LEN(dmp->mtu);
 
-    n_mbufs = mp_config->n_mbufs;
+    dmp->n_mbufs = mp_config->n_mbufs;
 
     do {
         /* Full DPDK memory pool name must be unique and cannot be
@@ -823,20 +829,20 @@ dpdk_mp_create(struct netdev_dpdk *dev, struct mp_config *mp_config)
          */
         ret = snprintf(mp_name, RTE_MEMPOOL_NAMESIZE,
                        "ovs%08x%02d%05d%07u",
-                        hash, dmp->socket_id, dmp->mtu, n_mbufs);
+                        hash, dmp->socket_id, dmp->mtu, dmp->n_mbufs);
         if (ret < 0 || ret >= RTE_MEMPOOL_NAMESIZE) {
             VLOG_DBG("snprintf returned %d. "
                      "Failed to generate a mempool name for \"%s\". "
                      "Hash:0x%x, socket_id: %d, mtu:%d, mbufs:%u.",
                      ret, netdev_name, hash, dmp->socket_id, dmp->mtu,
-                     n_mbufs);
+                     dmp->n_mbufs);
             break;
         }
 
         VLOG_DBG("Port %s: Requesting a mempool of %u mbufs of size %u "
                   "on socket %d for %d Rx and %d Tx queues, "
                   "cache line size of %u",
-                  netdev_name, n_mbufs, mbuf_size, dmp->socket_id,
+                  netdev_name, dmp->n_mbufs, mbuf_size, dmp->socket_id,
                   dev->requested_n_rxq, dev->requested_n_txq,
                   RTE_CACHE_LINE_SIZE);
 
@@ -859,14 +865,14 @@ dpdk_mp_create(struct netdev_dpdk *dev, struct mp_config *mp_config)
          */
         mbuf_priv_data_len += (aligned_mbuf_size - pkt_size);
 
-        dmp->mp = rte_pktmbuf_pool_create(mp_name, n_mbufs, MP_CACHE_SZ,
+        dmp->mp = rte_pktmbuf_pool_create(mp_name, dmp->n_mbufs, MP_CACHE_SZ,
                                           mbuf_priv_data_len,
                                           mbuf_size,
                                           dmp->socket_id);
 
         if (dmp->mp) {
             VLOG_DBG("Allocated \"%s\" mempool with %u mbufs",
-                     mp_name, n_mbufs);
+                     mp_name, dmp->n_mbufs);
             /* rte_pktmbuf_pool_create has done some initialization of the
              * rte_mbuf part of each dp_packet, while ovs_rte_pktmbuf_init
              * initializes some OVS specific fields of dp_packet.
@@ -883,15 +889,21 @@ dpdk_mp_create(struct netdev_dpdk *dev, struct mp_config *mp_config)
             VLOG_DBG("A mempool with name \"%s\" already exists at %p.",
                      mp_name, dmp->mp);
             return dmp;
-        } else {
-            VLOG_DBG("Failed to create mempool \"%s\" with a request of "
-                     "%u mbufs, retrying with %u mbufs",
-                     mp_name, n_mbufs, n_mbufs / 2);
         }
-    } while (!dmp->mp && rte_errno == ENOMEM && (n_mbufs /= 2) >= MIN_NB_MBUF);
+
+        /* User specified an exact count of mbufs. */
+        if (mp_config->exact) {
+            break;
+        }
+
+        VLOG_DBG("Failed to create mempool \"%s\" with a request of "
+                 "%u mbufs, retrying with %u mbufs",
+                 mp_name, dmp->n_mbufs, dmp->n_mbufs / 2);
+    } while (!dmp->mp && rte_errno == ENOMEM
+             && (dmp->n_mbufs /= 2) >= MIN_NB_MBUF);
 
     VLOG_ERR("Failed to create mempool \"%s\" with a request of %u mbufs",
-             mp_name, n_mbufs);
+             mp_name, dmp->n_mbufs);
 
     rte_free(dmp);
     return NULL;
@@ -909,7 +921,8 @@ dpdk_mp_get(struct netdev_dpdk *dev, struct mp_config *mp_config)
     if (mp_config->shared) {
         LIST_FOR_EACH (dmp, list_node, &dpdk_mp_list) {
             if (dmp->socket_id == mp_config->socket_id
-                && dmp->mtu == mp_config->adj_mtu) {
+                && dmp->mtu == mp_config->adj_mtu
+                && (!mp_config->exact || dmp->n_mbufs == mp_config->n_mbufs)) {
                 VLOG_DBG("Reusing mempool \"%s\"", dmp->mp->name);
                 dmp->refcount++;
                 reuse = true;
@@ -980,11 +993,14 @@ netdev_dpdk_mempool_configure(struct netdev_dpdk *dev)
     dpdk_mp_config_get(dev, &mp_config);
 
     /* With shared memory we do not need to configure a mempool if the MTU
-     * and socket ID have not changed, the previous configuration is still
-     * valid so return 0 */
-    if (mp_config.shared && dev->mtu == dev->requested_mtu
-        && dev->socket_id == dev->requested_socket_id) {
-        return ret;
+     * and socket ID have not changed or if the mempool already satisfies
+     * the user configuration. */
+    if (mp_config.shared
+        && dev->mtu == dev->requested_mtu
+        && dev->socket_id == dev->requested_socket_id
+        && dev->dpdk_mp
+        && (!mp_config.exact || dev->dpdk_mp->n_mbufs == mp_config.n_mbufs)) {
+        return 0;
     }
 
     dmp = dpdk_mp_get(dev, &mp_config);
@@ -6729,12 +6745,27 @@ parse_user_mempools_list(const struct smap *ovs_other_config)
     list = copy = xstrdup(mtus);
 
     while (ofputil_parse_key_value(&list, &key, &value)) {
-        int socket_id, mtu, adj_mtu;
+        int socket_id, mtu, adj_mtu, n_mbufs;
+        char *size_str;
+        char *count;
 
         if (!str_to_int(key, 0, &mtu) || mtu < 0) {
             error = EINVAL;
             VLOG_WARN("Invalid user configured shared mempool MTU.");
             break;
+        }
+
+        count = strchr(value, ':');
+        if (!count) {
+            n_mbufs = 0;
+        } else {
+            count[0] = '\0';
+            count++;
+            if (!str_to_int(count, 0, &n_mbufs) || n_mbufs < 0) {
+                error = EINVAL;
+                VLOG_WARN("Invalid user configured shared mempool size.");
+                break;
+            }
         }
 
         if (!str_to_int(value, 0, &socket_id)) {
@@ -6751,9 +6782,17 @@ parse_user_mempools_list(const struct smap *ovs_other_config)
         adj_mtu = FRAME_LEN_TO_MTU(dpdk_buf_size(mtu));
         user_mempools[n_user_mempools].adj_mtu = adj_mtu;
         user_mempools[n_user_mempools].socket_id = socket_id;
+        user_mempools[n_user_mempools].n_mbufs = n_mbufs;
         n_user_mempools++;
-        VLOG_INFO("User configured shared mempool set for: MTU %d, NUMA %s.",
-                  mtu, socket_id == INT_MAX ? "ALL" : value);
+        if (n_mbufs) {
+            size_str = xasprintf("%d mbufs", n_mbufs);
+        } else {
+            size_str = xstrdup("default size");
+        }
+        VLOG_INFO("User configured shared mempool set for: MTU %d, NUMA %s"
+                  ", %s.", mtu, socket_id == INT_MAX ? "ALL" : value,
+                  size_str);
+        free(size_str);
     }
 
     if (error) {

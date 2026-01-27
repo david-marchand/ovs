@@ -1,5 +1,8 @@
 Post-v3.7.0
 --------------------
+   - DPDK:
+     * The configuration knob 'other_config:shared-mempool-config' has been
+       updated so that a shared mempool elements count can be chosen.
 
 
 v3.7.0 - xx xxx xxxx

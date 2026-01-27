@@ -1,18 +1,21 @@
 AT_BANNER([OVS-DPDK unit tests])
 
-dnl CHECK_MEMPOOL_PARAM([mtu], [numa], [+line])
+dnl CHECK_MEMPOOL_PARAM([mtu], [numa], [+line], [mbufs])
 dnl
 dnl Waits for logs to indicate that the user has configured a mempool
 dnl for 'mtu' on 'numa'. Checking starts from line number 'line' in
-dnl ovs-vswitchd.log.
+dnl ovs-vswitchd.log. If 'mbufs' is provided, checks for count in log.
 m4_define([CHECK_MEMPOOL_PARAM], [
     line_st=$3
     if [[ -z "$line_st" ]]
     then
         line_st="+0"
     fi
-    OVS_WAIT_UNTIL([tail -n $line_st ovs-vswitchd.log dnl
-                   | grep "User configured shared mempool set for: MTU $1, NUMA $2."])
+    m4_if([$4], [],
+        [OVS_WAIT_UNTIL([tail -n $line_st ovs-vswitchd.log dnl
+                        | grep "User configured shared mempool.*: MTU $1, NUMA $2, default size"])],
+        [OVS_WAIT_UNTIL([tail -n $line_st ovs-vswitchd.log dnl
+                        | grep "User configured shared mempool.*: MTU $1, NUMA $2, $4 mbufs"])])
 ])
 
 dnl ADD_VHOST_USER_CLIENT_PORT([bridge], [port], [socket])
@@ -941,6 +944,40 @@ AT_CHECK([ovs-vsctl del-port br10 p1], [], [stdout], [stderr])
 OVS_DPDK_STOP_VSWITCHD
 AT_CLEANUP
 dnl --------------------------------------------------------------------------
+
+
+
+dnl --------------------------------------------------------------------------
+AT_SETUP([OVS-DPDK - user configured mempool with mbuf count])
+AT_KEYWORDS([dpdk])
+OVS_DPDK_PRE_CHECK()
+OVS_DPDK_START_OVSDB()
+OVS_DPDK_START_VSWITCHD([--no-pci])
+
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:shared-mempool-config=1500::65536,9000::131072])
+AT_CHECK([ovs-vsctl --no-wait set Open_vSwitch . other_config:dpdk-init=true])
+
+CHECK_MEMPOOL_PARAM([1500], [ALL], [], [65536])
+CHECK_MEMPOOL_PARAM([9000], [ALL], [], [131072])
+
+AT_CHECK(ovs-appctl vlog/set netdev_dpdk:dbg)
+
+TMP=$(($(cat ovs-vswitchd.log | wc -l | tr -d [[:blank:]])+1))
+AT_CHECK([ovs-vsctl add-br br10 -- set bridge br10 datapath_type=netdev])
+AT_CHECK([ovs-vsctl add-port br10 p1 -- set Interface p1 type=dpdk options:dpdk-devargs=net_null0,no-rx=1], [], [stdout], [stderr])
+OVS_WAIT_UNTIL([tail -n +$TMP ovs-vswitchd.log | grep "Port p1: Requesting a mempool of 65536 mbufs"])
+
+TMP=$(($(cat ovs-vswitchd.log | wc -l | tr -d [[:blank:]])+1))
+AT_CHECK(ovs-vsctl set Interface p1 mtu_request=9000)
+OVS_WAIT_UNTIL([tail -n +$TMP ovs-vswitchd.log | grep "Port p1: Requesting a mempool of 131072 mbufs"])
+
+dnl Clean up
+AT_CHECK([ovs-vsctl del-port br10 p1], [], [stdout], [stderr])
+OVS_DPDK_STOP_VSWITCHD
+AT_CLEANUP
+dnl --------------------------------------------------------------------------
+
+
 
 dnl --------------------------------------------------------------------------
 AT_SETUP([OVS-DPDK - ovs-appctl dpif/offload/show])
