@@ -591,11 +591,11 @@ AT_CHECK([ovs-vsctl add-port br10 phy0 -- set Interface phy0 type=dpdk options:d
 AT_CHECK([ovs-vsctl show], [], [stdout])
 
 dnl Check default MTU value in the datapath
-OVS_WAIT_UNTIL_EQUAL([ovs-vsctl get Interface phy0 mtu], [1500])
+AT_CHECK([ovs-vsctl wait-until Interface phy0 mtu=1500])
 
 dnl Increase MTU value and check in the datapath
 AT_CHECK([ovs-vsctl set Interface phy0 mtu_request=9000])
-OVS_WAIT_UNTIL_EQUAL([ovs-vsctl get Interface phy0 mtu], [9000])
+AT_CHECK([ovs-vsctl wait-until Interface phy0 mtu=9000])
 
 dnl Fail if MTU is not supported
 AT_FAIL_IF([grep "Interface phy0 does not support MTU configuration" ovs-vswitchd.log], [], [stdout])
@@ -629,7 +629,7 @@ AT_CHECK([ovs-vsctl set Interface phy0 mtu_request=9000])
 AT_CHECK([ovs-vsctl show], [], [stdout])
 
 dnl Check MTU value in the datapath
-OVS_WAIT_UNTIL_EQUAL([ovs-vsctl get Interface phy0 mtu], [9000])
+AT_CHECK([ovs-vsctl wait-until Interface phy0 mtu=9000])
 
 dnl Fail if MTU is not supported
 AT_FAIL_IF([grep "Interface phy0 does not support MTU configuration" ovs-vswitchd.log], [], [stdout])
@@ -639,7 +639,7 @@ AT_FAIL_IF([grep "Interface phy0 MTU (9000) setup error" ovs-vswitchd.log], [], 
 
 dnl Decrease MTU value and check in the datapath
 AT_CHECK([ovs-vsctl set Interface phy0 mtu_request=2000])
-OVS_WAIT_UNTIL_EQUAL([ovs-vsctl get Interface phy0 mtu], [2000])
+AT_CHECK([ovs-vsctl wait-until Interface phy0 mtu=2000])
 
 
 dnl Clean up
@@ -667,7 +667,7 @@ sleep 2
 
 OVS_DPDK_START_TESTPMD([--vdev="net_virtio_user,path=$OVS_RUNDIR/dpdkvhostclient0,server=1"])
 OVS_WAIT_UNTIL([grep "virtio is now ready for processing" ovs-vswitchd.log])
-OVS_WAIT_UNTIL([ovs-vsctl get Interface dpdkvhostuserclient0 link_state | grep -w up])
+AT_CHECK([ovs-vsctl wait-until Interface dpdkvhostuserclient0 link_state=up])
 
 dnl Check default MTU value in the datapath
 AT_CHECK([ovs-vsctl get Interface dpdkvhostuserclient0 mtu], [0], [dnl
@@ -709,7 +709,7 @@ sleep 2
 
 OVS_DPDK_START_TESTPMD([--vdev="net_virtio_user,path=$OVS_RUNDIR/dpdkvhostclient0,server=1"])
 OVS_WAIT_UNTIL([grep "virtio is now ready for processing" ovs-vswitchd.log])
-OVS_WAIT_UNTIL([ovs-vsctl get Interface dpdkvhostuserclient0 link_state | grep -w up])
+AT_CHECK([ovs-vsctl wait-until Interface dpdkvhostuserclient0 link_state=up])
 
 dnl Check MTU value in the datapath
 AT_CHECK([ovs-vsctl get Interface dpdkvhostuserclient0 mtu], [0], [dnl
@@ -748,7 +748,7 @@ AT_CHECK([ovs-vsctl set Interface phy0 mtu_request=9702])
 AT_CHECK([ovs-vsctl show], [], [stdout])
 
 dnl Check MTU value in the datapath
-OVS_WAIT_UNTIL_EQUAL([ovs-vsctl get Interface phy0 mtu], [9702])
+AT_CHECK([ovs-vsctl wait-until Interface phy0 mtu=9702])
 
 dnl Fail if MTU is not supported
 AT_FAIL_IF([grep "Interface phy0 does not support MTU configuration" ovs-vswitchd.log], [], [stdout])
@@ -786,7 +786,7 @@ AT_CHECK([ovs-vsctl set Interface phy0 mtu_request=68])
 AT_CHECK([ovs-vsctl show], [], [stdout])
 
 dnl Check MTU value in the datapath
-OVS_WAIT_UNTIL_EQUAL([ovs-vsctl get Interface phy0 mtu], [68])
+AT_CHECK([ovs-vsctl wait-until Interface phy0 mtu=68])
 
 dnl Fail if MTU is not supported
 AT_FAIL_IF([grep "Interface phy0 does not support MTU configuration" ovs-vswitchd.log], [], [stdout])
@@ -828,7 +828,7 @@ sleep 2
 OVS_DPDK_START_TESTPMD([--vdev="net_virtio_user,path=$OVS_RUNDIR/dpdkvhostclient0,server=1"])
 
 OVS_WAIT_UNTIL([grep "virtio is now ready for processing" ovs-vswitchd.log])
-OVS_WAIT_UNTIL([ovs-vsctl get Interface dpdkvhostuserclient0 link_state | grep -w up])
+AT_CHECK([ovs-vsctl wait-until Interface dpdkvhostuserclient0 link_state=up])
 
 dnl Check MTU value in the datapath
 AT_CHECK([ovs-vsctl get Interface dpdkvhostuserclient0 mtu], [0], [dnl
@@ -870,7 +870,7 @@ sleep 2
 OVS_DPDK_START_TESTPMD([--vdev="net_virtio_user,path=$OVS_RUNDIR/dpdkvhostclient0,server=1"])
 
 OVS_WAIT_UNTIL([grep "virtio is now ready for processing" ovs-vswitchd.log])
-OVS_WAIT_UNTIL([ovs-vsctl get Interface dpdkvhostuserclient0 link_state | grep -w up])
+AT_CHECK([ovs-vsctl wait-until Interface dpdkvhostuserclient0 link_state=up])
 
 dnl Check MTU value in the datapath
 AT_CHECK([ovs-vsctl get Interface dpdkvhostuserclient0 mtu], [0], [dnl

@@ -945,7 +945,7 @@ AT_CHECK([ovs-ofctl add-flow br0 in_port=1,actions=output:2])
 
 AT_CHECK([SEND_UDP_PKTS([p1], [1])])
 
-OVS_WAIT_UNTIL([test `ovs-vsctl get Interface p2 statistics:tx_packets` -eq 128])
+AT_CHECK([ovs-vsctl wait-until Interface p2 statistics:tx_packets=128])
 AT_CHECK([ovs-vsctl get Interface p2 statistics], [], [stdout])
 AT_CHECK([test `ovs-vsctl get Interface p2 statistics:tx_q0_packets` -eq 0 -a dnl
                `ovs-vsctl get Interface p2 statistics:tx_q1_packets` -eq 128 || dnl
@@ -962,7 +962,7 @@ AT_CHECK([ovs-ofctl add-flow br0 in_port=1,actions=output:2])
 
 AT_CHECK([SEND_UDP_PKTS([p1], [1])])
 
-OVS_WAIT_UNTIL([test `ovs-vsctl get Interface p2 statistics:tx_packets` -eq 128])
+AT_CHECK([ovs-vsctl wait-until Interface p2 statistics:tx_packets=128])
 AT_CHECK([ovs-vsctl get Interface p2 statistics], [], [stdout])
 
 AT_CHECK([test `ovs-vsctl get Interface p2 statistics:tx_q0_packets` -gt 0 -a dnl
@@ -979,7 +979,7 @@ AT_CHECK([ovs-ofctl add-flow br0 in_port=1,actions=output:2])
 
 AT_CHECK([SEND_UDP_PKTS([p1], [1])])
 
-OVS_WAIT_UNTIL([test `ovs-vsctl get Interface p2 statistics:tx_packets` -eq 128])
+AT_CHECK([ovs-vsctl wait-until Interface p2 statistics:tx_packets=128])
 AT_CHECK([ovs-vsctl get Interface p2 statistics], [], [stdout])
 
 AT_CHECK([test `ovs-vsctl get Interface p2 statistics:tx_q0_packets` -gt 0 -a dnl
