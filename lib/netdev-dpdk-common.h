@@ -42,8 +42,10 @@ struct smap;
 
 #define SOCKET0 0
 
-extern struct ovs_mutex dpdk_mutex;
-extern struct ovs_mutex dpdk_mp_mutex OVS_ACQ_AFTER(dpdk_mutex);
+extern struct ovs_mutex dpdk_eth_mutex;
+extern struct ovs_mutex dpdk_vhost_mutex;
+extern struct ovs_mutex dpdk_mp_mutex
+    OVS_ACQ_AFTER(dpdk_eth_mutex, dpdk_vhost_mutex);
 
 /* Need to reserve tons of extra space in the mbufs so we can align the
  * DMA addresses to 4KB.
