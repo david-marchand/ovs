@@ -1026,7 +1026,7 @@ netdev_dpdk_cast(const struct netdev *netdev)
 }
 
 static struct netdev *
-netdev_dpdk_alloc(void)
+netdev_dpdk_eth_alloc(void)
 {
     struct netdev_dpdk *dev;
 
@@ -1052,6 +1052,19 @@ netdev_dpdk_alloc_txq(unsigned int n_txqs)
     }
 
     return txqs;
+}
+
+static struct netdev *
+netdev_dpdk_vhost_alloc(void)
+{
+    struct netdev_dpdk *dev;
+
+    dev = dpdk_rte_mzalloc(sizeof *dev);
+    if (dev) {
+        return &dev->up;
+    }
+
+    return NULL;
 }
 
 static void
@@ -1229,7 +1242,7 @@ netdev_dpdk_vhost_client_construct(struct netdev *netdev)
 }
 
 static int
-netdev_dpdk_construct(struct netdev *netdev)
+netdev_dpdk_eth_construct(struct netdev *netdev)
 {
     struct netdev_dpdk_common *common = netdev_dpdk_common_cast(netdev);
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
@@ -1276,7 +1289,7 @@ common_destruct(struct netdev_dpdk_common *common)
 static void dpdk_rx_steer_unconfigure(struct netdev_dpdk *);
 
 static void
-netdev_dpdk_destruct(struct netdev *netdev)
+netdev_dpdk_eth_destruct(struct netdev *netdev)
 {
     struct netdev_dpdk_common *common = netdev_dpdk_common_cast(netdev);
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
@@ -1355,6 +1368,14 @@ netdev_dpdk_destruct(struct netdev *netdev)
     ovs_mutex_destroy(&dev->mutex);
 }
 
+static void
+netdev_dpdk_eth_dealloc(struct netdev *netdev)
+{
+    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
+
+    rte_free(dev);
+}
+
 /* rte_vhost_driver_unregister() can call back destroy_device(), which will
  * try to acquire 'dpdk_mutex' and possibly 'dev->mutex'.  To avoid a
  * deadlock, none of the mutexes must be held while calling this function. */
@@ -1413,7 +1434,7 @@ out:
 }
 
 static void
-netdev_dpdk_dealloc(struct netdev *netdev)
+netdev_dpdk_vhost_dealloc(struct netdev *netdev)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
 
@@ -2103,7 +2124,7 @@ out:
 }
 
 static struct netdev_rxq *
-netdev_dpdk_rxq_alloc(void)
+netdev_dpdk_eth_rxq_alloc(void)
 {
     struct netdev_rxq_dpdk *rx = dpdk_rte_mzalloc(sizeof *rx);
 
@@ -2121,7 +2142,7 @@ netdev_rxq_dpdk_cast(const struct netdev_rxq *rxq)
 }
 
 static int
-netdev_dpdk_rxq_construct(struct netdev_rxq *rxq)
+netdev_dpdk_eth_rxq_construct(struct netdev_rxq *rxq)
 {
     struct netdev_rxq_dpdk *rx = netdev_rxq_dpdk_cast(rxq);
     struct netdev_dpdk *dev = netdev_dpdk_cast(rxq->netdev);
@@ -2139,11 +2160,29 @@ netdev_dpdk_rxq_destruct(struct netdev_rxq *rxq OVS_UNUSED)
 }
 
 static void
-netdev_dpdk_rxq_dealloc(struct netdev_rxq *rxq)
+netdev_dpdk_eth_rxq_dealloc(struct netdev_rxq *rxq)
 {
     struct netdev_rxq_dpdk *rx = netdev_rxq_dpdk_cast(rxq);
 
     rte_free(rx);
+}
+
+static struct netdev_rxq *
+netdev_dpdk_vhost_rxq_alloc(void)
+{
+    return dpdk_rte_mzalloc(sizeof(struct netdev_rxq));
+}
+
+static int
+netdev_dpdk_vhost_rxq_construct(struct netdev_rxq *rxq OVS_UNUSED)
+{
+    return 0;
+}
+
+static void
+netdev_dpdk_vhost_rxq_dealloc(struct netdev_rxq *rxq)
+{
+    rte_free(rxq);
 }
 
 static inline void
@@ -2998,24 +3037,21 @@ netdev_dpdk_eth_send(struct netdev *netdev, int qid,
 }
 
 static int
-netdev_dpdk_set_etheraddr__(struct netdev_dpdk *dev, const struct eth_addr mac)
+netdev_dpdk_eth_set_etheraddr__(struct netdev_dpdk *dev,
+                                const struct eth_addr mac)
     OVS_REQUIRES(dev->mutex)
 {
     struct netdev_dpdk_common *common = netdev_dpdk_common_cast(&dev->up);
-    struct netdev *netdev = &common->up;
-    int err = 0;
+    struct rte_ether_addr ea;
+    int err;
 
-    if (is_dpdk_class(netdev->netdev_class)) {
-        struct rte_ether_addr ea;
-
-        memcpy(ea.addr_bytes, mac.ea, ETH_ADDR_LEN);
-        err = -rte_eth_dev_default_mac_addr_set(dev->port_id, &ea);
-    }
+    memcpy(ea.addr_bytes, mac.ea, ETH_ADDR_LEN);
+    err = -rte_eth_dev_default_mac_addr_set(dev->port_id, &ea);
     if (!err) {
         common->hwaddr = mac;
     } else {
         VLOG_WARN("%s: Failed to set requested mac("ETH_ADDR_FMT"): %s",
-                  netdev_get_name(netdev), ETH_ADDR_ARGS(mac),
+                  netdev_get_name(&common->up), ETH_ADDR_ARGS(mac),
                   rte_strerror(err));
     }
 
@@ -3023,7 +3059,7 @@ netdev_dpdk_set_etheraddr__(struct netdev_dpdk *dev, const struct eth_addr mac)
 }
 
 static int
-netdev_dpdk_set_etheraddr(struct netdev *netdev, const struct eth_addr mac)
+netdev_dpdk_eth_set_etheraddr(struct netdev *netdev, const struct eth_addr mac)
 {
     struct netdev_dpdk_common *common = netdev_dpdk_common_cast(netdev);
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
@@ -3031,7 +3067,7 @@ netdev_dpdk_set_etheraddr(struct netdev *netdev, const struct eth_addr mac)
 
     ovs_mutex_lock(&dev->mutex);
     if (!eth_addr_equals(common->hwaddr, mac)) {
-        err = netdev_dpdk_set_etheraddr__(dev, mac);
+        err = netdev_dpdk_eth_set_etheraddr__(dev, mac);
         if (!err) {
             netdev_change_seq_changed(netdev);
         }
@@ -3039,6 +3075,23 @@ netdev_dpdk_set_etheraddr(struct netdev *netdev, const struct eth_addr mac)
     ovs_mutex_unlock(&dev->mutex);
 
     return err;
+}
+
+static int
+netdev_dpdk_vhost_set_etheraddr(struct netdev *netdev,
+                                const struct eth_addr mac)
+{
+    struct netdev_dpdk_common *common = netdev_dpdk_common_cast(netdev);
+    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
+
+    ovs_mutex_lock(&dev->mutex);
+    if (!eth_addr_equals(common->hwaddr, mac)) {
+        common->hwaddr = mac;
+        netdev_change_seq_changed(netdev);
+    }
+    ovs_mutex_unlock(&dev->mutex);
+
+    return 0;
 }
 
 static int
@@ -3895,9 +3948,9 @@ netdev_dpdk_get_carrier_resets(const struct netdev *netdev)
 }
 
 static int
-netdev_dpdk_update_flags__(struct netdev_dpdk *dev,
-                           enum netdev_flags off, enum netdev_flags on,
-                           enum netdev_flags *old_flagsp)
+netdev_dpdk_eth_update_flags__(struct netdev_dpdk *dev,
+                               enum netdev_flags off, enum netdev_flags on,
+                               enum netdev_flags *old_flagsp)
     OVS_REQUIRES(dev->mutex)
 {
     struct netdev_dpdk_common *common = netdev_dpdk_common_cast(&dev->up);
@@ -3907,7 +3960,7 @@ netdev_dpdk_update_flags__(struct netdev_dpdk *dev,
         return EINVAL;
     }
 
-    *old_flagsp = dev->flags;
+    *old_flagsp = common->flags;
     common->flags |= on;
     common->flags &= ~off;
 
@@ -3915,48 +3968,69 @@ netdev_dpdk_update_flags__(struct netdev_dpdk *dev,
         return 0;
     }
 
-    if (is_dpdk_class(netdev->netdev_class)) {
+    if ((common->flags ^ *old_flagsp) & NETDEV_UP) {
+        int err;
 
-        if ((common->flags ^ *old_flagsp) & NETDEV_UP) {
-            int err;
-
-            if (common->flags & NETDEV_UP) {
-                err = rte_eth_dev_set_link_up(dev->port_id);
-            } else {
-                err = rte_eth_dev_set_link_down(dev->port_id);
-            }
-            if (err == -ENOTSUP) {
-                VLOG_INFO("Interface %s does not support link state "
-                          "configuration", netdev_get_name(netdev));
-            } else if (err < 0) {
-                VLOG_ERR("Interface %s link change error: %s",
-                         netdev_get_name(netdev), rte_strerror(-err));
-                common->flags = *old_flagsp;
-                return -err;
-            }
+        if (common->flags & NETDEV_UP) {
+            err = rte_eth_dev_set_link_up(dev->port_id);
+        } else {
+            err = rte_eth_dev_set_link_down(dev->port_id);
         }
-
-        if (common->flags & NETDEV_PROMISC) {
-            rte_eth_promiscuous_enable(dev->port_id);
+        if (err == -ENOTSUP) {
+            VLOG_INFO("Interface %s does not support link state "
+                      "configuration", netdev_get_name(netdev));
+        } else if (err < 0) {
+            VLOG_ERR("Interface %s link change error: %s",
+                     netdev_get_name(netdev), rte_strerror(-err));
+            common->flags = *old_flagsp;
+            return -err;
         }
+    }
 
+    if (common->flags & NETDEV_PROMISC) {
+        rte_eth_promiscuous_enable(dev->port_id);
+    }
+
+    netdev_change_seq_changed(netdev);
+
+    return 0;
+}
+
+static int
+netdev_dpdk_vhost_update_flags__(struct netdev_dpdk *dev,
+                                 enum netdev_flags off, enum netdev_flags on,
+                                 enum netdev_flags *old_flagsp)
+    OVS_REQUIRES(dev->mutex)
+{
+    struct netdev_dpdk_common *common = netdev_dpdk_common_cast(&dev->up);
+    struct netdev *netdev = &common->up;
+
+    if ((off | on) & ~(NETDEV_UP | NETDEV_PROMISC)) {
+        return EINVAL;
+    }
+
+    *old_flagsp = common->flags;
+    common->flags |= on;
+    common->flags &= ~off;
+
+    if (common->flags == *old_flagsp) {
+        return 0;
+    }
+
+    /* If vhost device's NETDEV_UP flag was changed and vhost is
+     * running then change netdev's change_seq to trigger link state
+     * update. */
+
+    if ((NETDEV_UP & ((*old_flagsp ^ on) | (*old_flagsp ^ off)))
+        && is_vhost_running(dev)) {
         netdev_change_seq_changed(netdev);
-    } else {
-        /* If DPDK_DEV_VHOST device's NETDEV_UP flag was changed and vhost is
-         * running then change netdev's change_seq to trigger link state
-         * update. */
 
-        if ((NETDEV_UP & ((*old_flagsp ^ on) | (*old_flagsp ^ off)))
-            && is_vhost_running(dev)) {
-            netdev_change_seq_changed(netdev);
-
-            /* Clear statistics if device is getting up. */
-            if (NETDEV_UP & on) {
-                rte_spinlock_lock(&common->stats_lock);
-                memset(&common->stats, 0, sizeof common->stats);
-                memset(common->sw_stats, 0, sizeof *common->sw_stats);
-                rte_spinlock_unlock(&common->stats_lock);
-            }
+        /* Clear statistics if device is getting up. */
+        if (NETDEV_UP & on) {
+            rte_spinlock_lock(&common->stats_lock);
+            memset(&common->stats, 0, sizeof common->stats);
+            memset(common->sw_stats, 0, sizeof *common->sw_stats);
+            rte_spinlock_unlock(&common->stats_lock);
         }
     }
 
@@ -3964,7 +4038,7 @@ netdev_dpdk_update_flags__(struct netdev_dpdk *dev,
 }
 
 static int
-netdev_dpdk_update_flags(struct netdev *netdev,
+netdev_dpdk_eth_update_flags(struct netdev *netdev,
                          enum netdev_flags off, enum netdev_flags on,
                          enum netdev_flags *old_flagsp)
 {
@@ -3972,7 +4046,22 @@ netdev_dpdk_update_flags(struct netdev *netdev,
     int error;
 
     ovs_mutex_lock(&dev->mutex);
-    error = netdev_dpdk_update_flags__(dev, off, on, old_flagsp);
+    error = netdev_dpdk_eth_update_flags__(dev, off, on, old_flagsp);
+    ovs_mutex_unlock(&dev->mutex);
+
+    return error;
+}
+
+static int
+netdev_dpdk_vhost_update_flags(struct netdev *netdev,
+                               enum netdev_flags off, enum netdev_flags on,
+                               enum netdev_flags *old_flagsp)
+{
+    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
+    int error;
+
+    ovs_mutex_lock(&dev->mutex);
+    error = netdev_dpdk_vhost_update_flags__(dev, off, on, old_flagsp);
     ovs_mutex_unlock(&dev->mutex);
 
     return error;
@@ -4169,15 +4258,28 @@ netdev_dpdk_get_status(const struct netdev *netdev, struct smap *args)
 }
 
 static void
-netdev_dpdk_set_admin_state__(struct netdev_dpdk *dev, bool admin_state)
+netdev_dpdk_eth_set_admin_state__(struct netdev_dpdk *dev, bool admin_state)
     OVS_REQUIRES(dev->mutex)
 {
     enum netdev_flags old_flags;
 
     if (admin_state) {
-        netdev_dpdk_update_flags__(dev, 0, NETDEV_UP, &old_flags);
+        netdev_dpdk_eth_update_flags__(dev, 0, NETDEV_UP, &old_flags);
     } else {
-        netdev_dpdk_update_flags__(dev, NETDEV_UP, 0, &old_flags);
+        netdev_dpdk_eth_update_flags__(dev, NETDEV_UP, 0, &old_flags);
+    }
+}
+
+static void
+netdev_dpdk_vhost_set_admin_state__(struct netdev_dpdk *dev, bool admin_state)
+    OVS_REQUIRES(dev->mutex)
+{
+    enum netdev_flags old_flags;
+
+    if (admin_state) {
+        netdev_dpdk_vhost_update_flags__(dev, 0, NETDEV_UP, &old_flags);
+    } else {
+        netdev_dpdk_vhost_update_flags__(dev, NETDEV_UP, 0, &old_flags);
     }
 }
 
@@ -4210,7 +4312,11 @@ netdev_dpdk_set_admin_state(struct unixctl_conn *conn, int argc,
         dev = netdev_dpdk_cast(netdev);
 
         ovs_mutex_lock(&dev->mutex);
-        netdev_dpdk_set_admin_state__(dev, up);
+        if (is_dpdk_class(netdev->netdev_class)) {
+            netdev_dpdk_eth_set_admin_state__(dev, up);
+        } else {
+            netdev_dpdk_vhost_set_admin_state__(dev, up);
+        }
         ovs_mutex_unlock(&dev->mutex);
 
         netdev_close(netdev);
@@ -4220,7 +4326,11 @@ netdev_dpdk_set_admin_state(struct unixctl_conn *conn, int argc,
         ovs_mutex_lock(&dpdk_mutex);
         LIST_FOR_EACH (dev, list_node, &dpdk_list) {
             ovs_mutex_lock(&dev->mutex);
-            netdev_dpdk_set_admin_state__(dev, up);
+            if (is_dpdk_class(dev->up.netdev_class)) {
+                netdev_dpdk_eth_set_admin_state__(dev, up);
+            } else {
+                netdev_dpdk_vhost_set_admin_state__(dev, up);
+            }
             ovs_mutex_unlock(&dev->mutex);
         }
         ovs_mutex_unlock(&dpdk_mutex);
@@ -5843,7 +5953,7 @@ retry:
     common->tx_q = NULL;
 
     if (!eth_addr_equals(common->hwaddr, dev->requested_hwaddr)) {
-        err = netdev_dpdk_set_etheraddr__(dev, dev->requested_hwaddr);
+        err = netdev_dpdk_eth_set_etheraddr__(dev, dev->requested_hwaddr);
         if (err) {
             goto out;
         }
@@ -5862,7 +5972,7 @@ retry:
      * the requested MAC is kept in sync.
      *
      * This is harmless in case requested_hwaddr was
-     * configured by the user, as netdev_dpdk_set_etheraddr__()
+     * configured by the user, as netdev_dpdk_eth_set_etheraddr__()
      * will have succeeded to get to this point.
      */
     dev->requested_hwaddr = common->hwaddr;
@@ -6274,16 +6384,16 @@ static const struct netdev_class netdev_dpdk_class = {
     .init = netdev_dpdk_class_init,
     .run = netdev_dpdk_run,
     .wait = netdev_dpdk_wait,
-    .alloc = netdev_dpdk_alloc,
-    .construct = netdev_dpdk_construct,
-    .destruct = netdev_dpdk_destruct,
-    .dealloc = netdev_dpdk_dealloc,
+    .alloc = netdev_dpdk_eth_alloc,
+    .construct = netdev_dpdk_eth_construct,
+    .destruct = netdev_dpdk_eth_destruct,
+    .dealloc = netdev_dpdk_eth_dealloc,
     .get_config = netdev_dpdk_get_config,
     .set_config = netdev_dpdk_set_config,
     .get_numa_id = netdev_dpdk_common_get_numa_id,
     .set_tx_multiq = netdev_dpdk_set_tx_multiq,
     .send = netdev_dpdk_eth_send,
-    .set_etheraddr = netdev_dpdk_set_etheraddr,
+    .set_etheraddr = netdev_dpdk_eth_set_etheraddr,
     .get_etheraddr = netdev_dpdk_eth_get_etheraddr,
     .get_mtu = netdev_dpdk_eth_get_mtu,
     .set_mtu = netdev_dpdk_eth_set_mtu,
@@ -6307,12 +6417,12 @@ static const struct netdev_class netdev_dpdk_class = {
     .queue_dump_next = netdev_dpdk_queue_dump_next,
     .queue_dump_done = netdev_dpdk_queue_dump_done,
     .get_status = netdev_dpdk_get_status,
-    .update_flags = netdev_dpdk_update_flags,
+    .update_flags = netdev_dpdk_eth_update_flags,
     .reconfigure = netdev_dpdk_reconfigure,
-    .rxq_alloc = netdev_dpdk_rxq_alloc,
-    .rxq_construct = netdev_dpdk_rxq_construct,
+    .rxq_alloc = netdev_dpdk_eth_rxq_alloc,
+    .rxq_construct = netdev_dpdk_eth_rxq_construct,
     .rxq_destruct = netdev_dpdk_rxq_destruct,
-    .rxq_dealloc = netdev_dpdk_rxq_dealloc,
+    .rxq_dealloc = netdev_dpdk_eth_rxq_dealloc,
     .rxq_recv = netdev_dpdk_rxq_recv,
 };
 
@@ -6320,13 +6430,13 @@ static const struct netdev_class netdev_dpdk_vhost_class = {
     .type = "dpdkvhostuser",
     .is_pmd = true,
     .init = netdev_dpdk_vhost_class_init,
-    .alloc = netdev_dpdk_alloc,
+    .alloc = netdev_dpdk_vhost_alloc,
     .construct = netdev_dpdk_vhost_construct,
     .destruct = netdev_dpdk_vhost_destruct,
-    .dealloc = netdev_dpdk_dealloc,
+    .dealloc = netdev_dpdk_vhost_dealloc,
     .get_numa_id = netdev_dpdk_common_get_numa_id,
     .send = netdev_dpdk_vhost_send,
-    .set_etheraddr = netdev_dpdk_set_etheraddr,
+    .set_etheraddr = netdev_dpdk_vhost_set_etheraddr,
     .get_etheraddr = netdev_dpdk_vhost_get_etheraddr,
     .get_mtu = netdev_dpdk_vhost_get_mtu,
     .set_mtu = netdev_dpdk_vhost_set_mtu,
@@ -6346,12 +6456,12 @@ static const struct netdev_class netdev_dpdk_vhost_class = {
     .queue_dump_next = netdev_dpdk_queue_dump_next,
     .queue_dump_done = netdev_dpdk_queue_dump_done,
     .get_status = netdev_dpdk_vhost_user_get_status,
-    .update_flags = netdev_dpdk_update_flags,
+    .update_flags = netdev_dpdk_vhost_update_flags,
     .reconfigure = netdev_dpdk_vhost_reconfigure,
-    .rxq_alloc = netdev_dpdk_rxq_alloc,
-    .rxq_construct = netdev_dpdk_rxq_construct,
+    .rxq_alloc = netdev_dpdk_vhost_rxq_alloc,
+    .rxq_construct = netdev_dpdk_vhost_rxq_construct,
     .rxq_destruct = netdev_dpdk_rxq_destruct,
-    .rxq_dealloc = netdev_dpdk_rxq_dealloc,
+    .rxq_dealloc = netdev_dpdk_vhost_rxq_dealloc,
     .rxq_enabled = netdev_dpdk_vhost_rxq_enabled,
     .rxq_recv = netdev_dpdk_vhost_rxq_recv,
 };
@@ -6360,15 +6470,15 @@ static const struct netdev_class netdev_dpdk_vhost_client_class = {
     .type = "dpdkvhostuserclient",
     .is_pmd = true,
     .init = netdev_dpdk_vhost_class_init,
-    .alloc = netdev_dpdk_alloc,
+    .alloc = netdev_dpdk_vhost_alloc,
     .construct = netdev_dpdk_vhost_client_construct,
     .destruct = netdev_dpdk_vhost_destruct,
-    .dealloc = netdev_dpdk_dealloc,
+    .dealloc = netdev_dpdk_vhost_dealloc,
     .get_config = netdev_dpdk_vhost_client_get_config,
     .set_config = netdev_dpdk_vhost_client_set_config,
     .get_numa_id = netdev_dpdk_common_get_numa_id,
     .send = netdev_dpdk_vhost_send,
-    .set_etheraddr = netdev_dpdk_set_etheraddr,
+    .set_etheraddr = netdev_dpdk_vhost_set_etheraddr,
     .get_etheraddr = netdev_dpdk_vhost_get_etheraddr,
     .get_mtu = netdev_dpdk_vhost_get_mtu,
     .set_mtu = netdev_dpdk_vhost_set_mtu,
@@ -6388,12 +6498,12 @@ static const struct netdev_class netdev_dpdk_vhost_client_class = {
     .queue_dump_next = netdev_dpdk_queue_dump_next,
     .queue_dump_done = netdev_dpdk_queue_dump_done,
     .get_status = netdev_dpdk_vhost_user_get_status,
-    .update_flags = netdev_dpdk_update_flags,
+    .update_flags = netdev_dpdk_vhost_update_flags,
     .reconfigure = netdev_dpdk_vhost_client_reconfigure,
-    .rxq_alloc = netdev_dpdk_rxq_alloc,
-    .rxq_construct = netdev_dpdk_rxq_construct,
+    .rxq_alloc = netdev_dpdk_vhost_rxq_alloc,
+    .rxq_construct = netdev_dpdk_vhost_rxq_construct,
     .rxq_destruct = netdev_dpdk_rxq_destruct,
-    .rxq_dealloc = netdev_dpdk_rxq_dealloc,
+    .rxq_dealloc = netdev_dpdk_vhost_rxq_dealloc,
     .rxq_enabled = netdev_dpdk_vhost_rxq_enabled,
     .rxq_recv = netdev_dpdk_vhost_rxq_recv,
 };
