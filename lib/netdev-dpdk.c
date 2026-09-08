@@ -210,11 +210,6 @@ struct netdev_dpdk_sw_stats {
     uint64_t tx_invalid_hwol_drops;
 };
 
-enum dpdk_dev_type {
-    DPDK_DEV_ETH = 0,
-    DPDK_DEV_VHOST = 1,
-};
-
 /* Quality of Service */
 
 /* An instance of a QoS configuration.  Always associated with a particular
@@ -467,7 +462,6 @@ struct netdev_dpdk {
         int socket_id;
         int buf_size;
         int max_packet_len;
-        enum dpdk_dev_type type;
         enum netdev_flags flags;
         int link_reset_cnt;
         union {
@@ -593,8 +587,9 @@ struct netdev_rxq_dpdk {
     dpdk_port_t port_id;
 };
 
-static void netdev_dpdk_destruct(struct netdev *netdev);
-static void netdev_dpdk_vhost_destruct(struct netdev *netdev);
+static const struct netdev_class netdev_dpdk_class;
+static const struct netdev_class netdev_dpdk_vhost_class;
+static const struct netdev_class netdev_dpdk_vhost_client_class;
 
 static int netdev_dpdk_get_sw_custom_stats(const struct netdev *,
                                            struct netdev_custom_stats *);
@@ -612,8 +607,14 @@ static void netdev_dpdk_mbuf_dump(const char *prefix, const char *message,
 static bool
 is_dpdk_class(const struct netdev_class *class)
 {
-    return class->destruct == netdev_dpdk_destruct
-           || class->destruct == netdev_dpdk_vhost_destruct;
+    return class == &netdev_dpdk_class;
+}
+
+static bool
+is_vhost_class(const struct netdev_class *class)
+{
+    return class == &netdev_dpdk_vhost_class
+           || class == &netdev_dpdk_vhost_client_class;
 }
 
 /* DPDK NIC drivers allocate RX buffers at a particular granularity, typically
@@ -1046,7 +1047,7 @@ dpdk_watchdog(void *dummy OVS_UNUSED)
         ovs_mutex_lock(&dpdk_mutex);
         LIST_FOR_EACH (dev, list_node, &dpdk_list) {
             ovs_mutex_lock(&dev->mutex);
-            if (dev->type == DPDK_DEV_ETH) {
+            if (is_dpdk_class(dev->up.netdev_class)) {
                 check_link_status(dev);
             }
             ovs_mutex_unlock(&dev->mutex);
@@ -1494,9 +1495,8 @@ netdev_dpdk_alloc_txq(unsigned int n_txqs)
     return txqs;
 }
 
-static int
-common_construct(struct netdev *netdev, dpdk_port_t port_no,
-                 enum dpdk_dev_type type, int socket_id)
+static void
+common_construct(struct netdev *netdev, dpdk_port_t port_no, int socket_id)
     OVS_REQUIRES(dpdk_mutex)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
@@ -1511,7 +1511,6 @@ common_construct(struct netdev *netdev, dpdk_port_t port_no,
     dev->socket_id = socket_id < 0 ? SOCKET0 : socket_id;
     dev->requested_socket_id = dev->socket_id;
     dev->port_id = port_no;
-    dev->type = type;
     dev->flags = 0;
     dev->requested_mtu = RTE_ETHER_MTU;
     dev->max_packet_len = MTU_TO_FRAME_LEN(dev->mtu);
@@ -1561,9 +1560,6 @@ common_construct(struct netdev *netdev, dpdk_port_t port_no,
     dev->rte_xstats_ids_size = 0;
 
     dev->sw_stats = xzalloc(sizeof *dev->sw_stats);
-    dev->sw_stats->tx_retries = (dev->type == DPDK_DEV_VHOST) ? 0 : UINT64_MAX;
-
-    return 0;
 }
 
 static int
@@ -1588,8 +1584,8 @@ vhost_common_construct(struct netdev *netdev)
 
     dev->vhost_max_queue_pairs = VHOST_MAX_QUEUE_PAIRS_DEF;
 
-    return common_construct(netdev, DPDK_ETH_PORT_ID_INVALID,
-                            DPDK_DEV_VHOST, socket_id);
+    common_construct(netdev, DPDK_ETH_PORT_ID_INVALID, socket_id);
+    return 0;
 }
 
 static int
@@ -1693,13 +1689,13 @@ netdev_dpdk_vhost_client_construct(struct netdev *netdev)
 static int
 netdev_dpdk_construct(struct netdev *netdev)
 {
-    int err;
+    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
 
     ovs_mutex_lock(&dpdk_mutex);
-    err = common_construct(netdev, DPDK_ETH_PORT_ID_INVALID,
-                           DPDK_DEV_ETH, SOCKET0);
+    common_construct(netdev, DPDK_ETH_PORT_ID_INVALID, SOCKET0);
+    dev->sw_stats->tx_retries = UINT64_MAX;
     ovs_mutex_unlock(&dpdk_mutex);
-    return err;
+    return 0;
 }
 
 static void
@@ -2260,13 +2256,6 @@ dpdk_set_rx_steer_config(struct netdev *netdev, struct netdev_dpdk *dev,
     } else if (strcmp(arg, "rss")) {
         VLOG_WARN("%s: options:rx-steering unsupported parameter value '%s'",
                   netdev_get_name(netdev), arg);
-    }
-
-    if (flags && dev->type != DPDK_DEV_ETH) {
-        VLOG_WARN("%s: options:rx-steering "
-                  "is only supported on ethernet ports",
-                  netdev_get_name(netdev));
-        flags = 0;
     }
 
     if (flags && dpif_offload_enabled()) {
@@ -3439,7 +3428,7 @@ netdev_dpdk_set_etheraddr__(struct netdev_dpdk *dev, const struct eth_addr mac)
 {
     int err = 0;
 
-    if (dev->type == DPDK_DEV_ETH) {
+    if (is_dpdk_class(dev->up.netdev_class)) {
         struct rte_ether_addr ea;
 
         memcpy(ea.addr_bytes, mac.ea, ETH_ADDR_LEN);
@@ -4352,7 +4341,7 @@ netdev_dpdk_update_flags__(struct netdev_dpdk *dev,
         return 0;
     }
 
-    if (dev->type == DPDK_DEV_ETH) {
+    if (is_dpdk_class(dev->up.netdev_class)) {
 
         if ((dev->flags ^ *old_flagsp) & NETDEV_UP) {
             int err;
@@ -4634,20 +4623,22 @@ netdev_dpdk_set_admin_state(struct unixctl_conn *conn, int argc,
 
     if (argc > 2) {
         struct netdev *netdev = netdev_from_name(argv[1]);
+        struct netdev_dpdk *dev;
 
-        if (netdev && is_dpdk_class(netdev->netdev_class)) {
-            struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
-
-            ovs_mutex_lock(&dev->mutex);
-            netdev_dpdk_set_admin_state__(dev, up);
-            ovs_mutex_unlock(&dev->mutex);
-
-            netdev_close(netdev);
-        } else {
+        if (!netdev || !(is_dpdk_class(netdev->netdev_class)
+                         || is_vhost_class(netdev->netdev_class))) {
             unixctl_command_reply_error(conn, "Not a DPDK Interface");
             netdev_close(netdev);
             return;
         }
+
+        dev = netdev_dpdk_cast(netdev);
+
+        ovs_mutex_lock(&dev->mutex);
+        netdev_dpdk_set_admin_state__(dev, up);
+        ovs_mutex_unlock(&dev->mutex);
+
+        netdev_close(netdev);
     } else {
         struct netdev_dpdk *dev;
 
@@ -4742,7 +4733,8 @@ netdev_dpdk_get_mempool_info(struct unixctl_conn *conn,
 
     if (argc == 2) {
         netdev = netdev_from_name(argv[1]);
-        if (!netdev || !is_dpdk_class(netdev->netdev_class)) {
+        if (!netdev || !(is_dpdk_class(netdev->netdev_class)
+                         || is_vhost_class(netdev->netdev_class))) {
             unixctl_command_reply_error(conn, "Not a DPDK Interface");
             goto out;
         }
@@ -6551,17 +6543,15 @@ netdev_dpdk_flow_api_supported(struct netdev *netdev, bool check_only)
 
     dev = netdev_dpdk_cast(netdev);
     ovs_mutex_lock(&dev->mutex);
-    if (dev->type == DPDK_DEV_ETH) {
-        if (dev->requested_rx_steer_flags && !check_only) {
-            VLOG_WARN("%s: rx-steering is mutually exclusive with hw-offload,"
-                      " falling back to default rss mode",
-                      netdev_get_name(netdev));
-            dev->requested_rx_steer_flags = 0;
-            netdev_request_reconfigure(netdev);
-        }
-        /* TODO: Check if we able to offload some minimal flow. */
-        ret = true;
+    if (dev->requested_rx_steer_flags && !check_only) {
+        VLOG_WARN("%s: rx-steering is mutually exclusive with hw-offload,"
+                  " falling back to default rss mode",
+                  netdev_get_name(netdev));
+        dev->requested_rx_steer_flags = 0;
+        netdev_request_reconfigure(netdev);
     }
+    /* TODO: Check if we able to offload some minimal flow. */
+    ret = true;
     ovs_mutex_unlock(&dev->mutex);
 out:
     return ret;
@@ -6750,7 +6740,7 @@ parse_vhost_config(const struct smap *ovs_other_config)
               vhost_postcopy_enabled ? "enabled" : "disabled");
 }
 
-static const struct netdev_class dpdk_class = {
+static const struct netdev_class netdev_dpdk_class = {
     .type = "dpdk",
     .is_pmd = true,
     .init = netdev_dpdk_class_init,
@@ -6798,7 +6788,7 @@ static const struct netdev_class dpdk_class = {
     .rxq_recv = netdev_dpdk_rxq_recv,
 };
 
-static const struct netdev_class dpdk_vhost_class = {
+static const struct netdev_class netdev_dpdk_vhost_class = {
     .type = "dpdkvhostuser",
     .is_pmd = true,
     .init = netdev_dpdk_vhost_class_init,
@@ -6838,7 +6828,7 @@ static const struct netdev_class dpdk_vhost_class = {
     .rxq_recv = netdev_dpdk_vhost_rxq_recv,
 };
 
-static const struct netdev_class dpdk_vhost_client_class = {
+static const struct netdev_class netdev_dpdk_vhost_client_class = {
     .type = "dpdkvhostuserclient",
     .is_pmd = true,
     .init = netdev_dpdk_vhost_class_init,
@@ -6887,7 +6877,7 @@ netdev_dpdk_register(const struct smap *ovs_other_config)
     parse_user_mempools_list(ovs_other_config);
     parse_vhost_config(ovs_other_config);
 
-    netdev_register_provider(&dpdk_class);
-    netdev_register_provider(&dpdk_vhost_class);
-    netdev_register_provider(&dpdk_vhost_client_class);
+    netdev_register_provider(&netdev_dpdk_class);
+    netdev_register_provider(&netdev_dpdk_vhost_class);
+    netdev_register_provider(&netdev_dpdk_vhost_client_class);
 }
