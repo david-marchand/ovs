@@ -1115,8 +1115,6 @@ netdev_dpdk_alloc_txq(unsigned int n_txqs)
     txqs = dpdk_rte_mzalloc(n_txqs * sizeof *txqs);
     if (txqs) {
         for (i = 0; i < n_txqs; i++) {
-            /* Initialize map for vhost devices. */
-            txqs[i].map = OVS_VHOST_QUEUE_MAP_UNKNOWN;
             rte_spinlock_init(&txqs[i].tx_lock);
         }
     }
@@ -1125,12 +1123,9 @@ netdev_dpdk_alloc_txq(unsigned int n_txqs)
 }
 
 static void
-common_construct(struct netdev *netdev, dpdk_port_t port_no, int socket_id)
-    OVS_REQUIRES(dpdk_mutex)
+common_construct(struct netdev *netdev, int socket_id)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
-
-    ovs_mutex_init(&dev->mutex);
 
     rte_spinlock_init(&dev->stats_lock);
 
@@ -1139,16 +1134,8 @@ common_construct(struct netdev *netdev, dpdk_port_t port_no, int socket_id)
      * use 'SOCKET0'. */
     dev->socket_id = socket_id < 0 ? SOCKET0 : socket_id;
     dev->requested_socket_id = dev->socket_id;
-    dev->port_id = port_no;
-    dev->flags = 0;
     dev->requested_mtu = RTE_ETHER_MTU;
     dev->max_packet_len = MTU_TO_FRAME_LEN(dev->mtu);
-    dev->requested_lsc_interrupt_mode = 0;
-    ovsrcu_index_init(&dev->vid, -1);
-    dev->vhost_reconfigured = false;
-    dev->virtio_features_state = OVS_VIRTIO_F_CLEAN;
-    dev->attached = false;
-    dev->started = false;
 
     ovsrcu_init(&dev->qos_conf, NULL);
 
@@ -1163,26 +1150,11 @@ common_construct(struct netdev *netdev, dpdk_port_t port_no, int socket_id)
     dev->requested_n_txq = NR_QUEUE;
     dev->requested_rxq_size = NIC_PORT_DEFAULT_RXQ_SIZE;
     dev->requested_txq_size = NIC_PORT_DEFAULT_TXQ_SIZE;
-    dev->requested_rx_steer_flags = 0;
-    dev->rx_steer_flags = 0;
-    dev->rx_steer_flows_num = 0;
-    dev->rx_steer_flows = NULL;
-
-    /* Initialize the flow control to NULL */
-    memset(&dev->fc_conf, 0, sizeof dev->fc_conf);
 
     /* Initilize the hardware offload flags to 0 */
     dev->hw_ol_features = 0;
 
-    dev->rx_metadata_delivery_configured = false;
-
     dev->flags = NETDEV_UP | NETDEV_PROMISC;
-
-    dev->rte_xstats_names = NULL;
-    dev->rte_xstats_names_size = 0;
-
-    dev->rte_xstats_ids = NULL;
-    dev->rte_xstats_ids_size = 0;
 
     dev->sw_stats = xzalloc(sizeof *dev->sw_stats);
 }
@@ -1204,12 +1176,19 @@ vhost_common_construct(struct netdev *netdev)
         rte_free(dev->vhost_rxq_enabled);
         return ENOMEM;
     }
+    for (unsigned i = 0; i < OVS_VHOST_MAX_QUEUE_NUM; i++) {
+        dev->tx_q[i].map = OVS_VHOST_QUEUE_MAP_UNKNOWN;
+    }
 
+    ovsrcu_index_init(&dev->vid, -1);
+    dev->vhost_reconfigured = false;
+    dev->virtio_features_state = OVS_VIRTIO_F_CLEAN;
     atomic_init(&dev->vhost_tx_retries_max, VHOST_ENQ_RETRY_DEF);
 
     dev->vhost_max_queue_pairs = VHOST_MAX_QUEUE_PAIRS_DEF;
 
-    common_construct(netdev, DPDK_ETH_PORT_ID_INVALID, socket_id);
+    ovs_mutex_init(&dev->mutex);
+    common_construct(netdev, socket_id);
 
     ovs_list_push_back(&dpdk_list, &dev->list_node);
 
@@ -1322,7 +1301,23 @@ netdev_dpdk_construct(struct netdev *netdev)
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
 
     ovs_mutex_lock(&dpdk_mutex);
-    common_construct(netdev, DPDK_ETH_PORT_ID_INVALID, SOCKET0);
+    ovs_mutex_init(&dev->mutex);
+    common_construct(netdev, SOCKET0);
+
+    dev->port_id = DPDK_ETH_PORT_ID_INVALID;
+    dev->attached = false;
+    dev->started = false;
+    dev->requested_lsc_interrupt_mode = 0;
+    dev->requested_rx_steer_flags = 0;
+    dev->rx_steer_flags = 0;
+    dev->rx_steer_flows_num = 0;
+    dev->rx_steer_flows = NULL;
+    memset(&dev->fc_conf, 0, sizeof dev->fc_conf);
+    dev->rx_metadata_delivery_configured = false;
+    dev->rte_xstats_names = NULL;
+    dev->rte_xstats_names_size = 0;
+    dev->rte_xstats_ids = NULL;
+    dev->rte_xstats_ids_size = 0;
     dev->sw_stats->tx_retries = UINT64_MAX;
 
     ovs_list_push_back(&dpdk_list, &dev->list_node);
@@ -1335,7 +1330,6 @@ netdev_dpdk_construct(struct netdev *netdev)
 
 static void
 common_destruct(struct netdev_dpdk *dev)
-    OVS_EXCLUDED(dev->mutex)
 {
     rte_free(dev->tx_q);
     dpdk_mp_put(dev->mp);
@@ -1343,7 +1337,6 @@ common_destruct(struct netdev_dpdk *dev)
     free(ovsrcu_get_protected(struct ingress_policer *,
                               &dev->ingress_policer));
     free(dev->sw_stats);
-    ovs_mutex_destroy(&dev->mutex);
 }
 
 static void dpdk_rx_steer_unconfigure(struct netdev_dpdk *);
@@ -1424,6 +1417,7 @@ netdev_dpdk_destruct(struct netdev *netdev)
     ovs_mutex_unlock(&dpdk_mutex);
 
     common_destruct(dev);
+    ovs_mutex_destroy(&dev->mutex);
 }
 
 /* rte_vhost_driver_unregister() can call back destroy_device(), which will
@@ -1465,6 +1459,7 @@ netdev_dpdk_vhost_destruct(struct netdev *netdev)
     ovs_mutex_unlock(&dpdk_mutex);
 
     common_destruct(dev);
+    ovs_mutex_destroy(&dev->mutex);
 
     if (!vhost_id) {
         goto out;
