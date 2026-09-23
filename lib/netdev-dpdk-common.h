@@ -32,8 +32,8 @@
 #include "ovs-thread.h"
 
 struct dpdk_tx_queue;
-struct ingress_policer;
-struct qos_conf;
+struct dpdk_qos_ingress_policer;
+struct dpdk_qos_conf;
 struct smap;
 
 /*
@@ -146,10 +146,10 @@ struct netdev_dpdk_common {
         struct ovs_list list_node;
 
         /* QoS configuration and lock for the device */
-        OVSRCU_TYPE(struct qos_conf *) qos_conf;
+        OVSRCU_TYPE(struct dpdk_qos_conf *) qos_conf;
 
         /* Ingress Policer */
-        OVSRCU_TYPE(struct ingress_policer *) ingress_policer;
+        OVSRCU_TYPE(struct dpdk_qos_ingress_policer *) ingress_policer;
         uint32_t policer_rate;
         uint32_t policer_burst;
 
@@ -264,5 +264,47 @@ int netdev_dpdk_common_set_mtu(struct netdev_dpdk_common *common, int mtu);
 void
 netdev_dpdk_common_get_sw_custom_stats(struct netdev_dpdk_common *common,
                                        struct netdev_custom_stats *stats);
+
+/* Quality of Service */
+
+int dpdk_qos_run(struct dpdk_qos_conf *qos_conf, struct rte_mbuf **pkts,
+                 int pkt_cnt, bool should_steal);
+
+/* Ingress policer */
+struct dpdk_qos_ingress_policer *
+    dpdk_qos_ingress_policer_construct(uint32_t rate, uint32_t burst);
+void dpdk_qos_ingress_policer_destruct(struct dpdk_qos_ingress_policer *);
+int dpdk_qos_ingress_policer_run(struct dpdk_qos_ingress_policer *policer,
+                                 struct rte_mbuf **pkts, int pkt_cnt,
+                                 bool should_steal);
+
+int netdev_dpdk_common_set_policing(struct netdev_dpdk_common *common,
+                                    uint32_t policer_rate,
+                                    uint32_t policer_burst);
+
+int netdev_dpdk_common_get_qos_types(const struct netdev *netdev,
+                                     struct sset *types);
+int netdev_dpdk_common_get_qos(const struct netdev_dpdk_common *common,
+                               const char **typep, struct smap *details);
+int netdev_dpdk_common_set_qos(struct netdev_dpdk_common *common,
+                               const char *type, const struct smap *details);
+int netdev_dpdk_common_get_queue(const struct netdev_dpdk_common *common,
+                                 uint32_t queue_id, struct smap *details);
+int netdev_dpdk_common_set_queue(struct netdev_dpdk_common *common,
+                                 uint32_t queue_id,
+                                 const struct smap *details);
+int netdev_dpdk_common_delete_queue(struct netdev_dpdk_common *common,
+                                    uint32_t queue_id);
+int netdev_dpdk_common_get_queue_stats(const struct netdev_dpdk_common *common,
+                                       uint32_t queue_id,
+                                       struct netdev_queue_stats *stats);
+int
+netdev_dpdk_common_queue_dump_start(const struct netdev_dpdk_common *common,
+                                    void **statep);
+int netdev_dpdk_common_queue_dump_next(const struct netdev_dpdk_common *common,
+                                       void *state_, uint32_t *queue_idp,
+                                       struct smap *details);
+int netdev_dpdk_common_queue_dump_done(const struct netdev *netdev,
+                                       void *state_);
 
 #endif /* NETDEV_DPDK_COMMON_H */
