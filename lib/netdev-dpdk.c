@@ -1527,11 +1527,8 @@ netdev_dpdk_vhost_alloc(void)
 
 static void
 common_construct(struct netdev *netdev, dpdk_port_t port_no, int socket_id)
-    OVS_REQUIRES(dpdk_mutex)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
-
-    ovs_mutex_init(&dev->mutex);
 
     rte_spinlock_init(&dev->stats_lock);
 
@@ -1579,10 +1576,6 @@ common_construct(struct netdev *netdev, dpdk_port_t port_no, int socket_id)
 
     dev->flags = NETDEV_UP | NETDEV_PROMISC;
 
-    ovs_list_push_back(&dpdk_list, &dev->list_node);
-
-    netdev_request_reconfigure(netdev);
-
     dev->rte_xstats_names = NULL;
     dev->rte_xstats_names_size = 0;
 
@@ -1594,7 +1587,6 @@ common_construct(struct netdev *netdev, dpdk_port_t port_no, int socket_id)
 
 static int
 vhost_common_construct(struct netdev *netdev)
-    OVS_REQUIRES(dpdk_mutex)
 {
     int socket_id = rte_lcore_to_socket_id(rte_get_main_lcore());
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
@@ -1610,11 +1602,13 @@ vhost_common_construct(struct netdev *netdev)
         return ENOMEM;
     }
 
+    common_construct(netdev, DPDK_ETH_PORT_ID_INVALID, socket_id);
+
+    ovs_mutex_init(&dev->mutex);
     atomic_init(&dev->vhost_tx_retries_max, VHOST_ENQ_RETRY_DEF);
 
     dev->vhost_max_queue_pairs = VHOST_MAX_QUEUE_PAIRS_DEF;
 
-    common_construct(netdev, DPDK_ETH_PORT_ID_INVALID, socket_id);
     return 0;
 }
 
@@ -1635,7 +1629,6 @@ netdev_dpdk_vhost_construct(struct netdev *netdev)
         return EINVAL;
     }
 
-    ovs_mutex_lock(&dpdk_mutex);
     /* Take the name of the vhost-user port and append it to the location where
      * the socket is to be created, then register the socket.
      */
@@ -1676,18 +1669,23 @@ netdev_dpdk_vhost_construct(struct netdev *netdev)
         }
     }
 
-    err = rte_vhost_driver_start(dev->vhost_id);
-    if (err) {
-        VLOG_ERR("rte_vhost_driver_start failed for vhost user "
-                 "port: %s\n", name);
-        goto out;
-    }
-
     err = vhost_common_construct(netdev);
     if (err) {
         VLOG_ERR("vhost_common_construct failed for vhost user "
                  "port: %s\n", name);
+        goto out;
     }
+
+    ovs_mutex_lock(&dpdk_mutex);
+    err = rte_vhost_driver_start(dev->vhost_id);
+    if (!err) {
+        ovs_list_push_back(&dpdk_list, &dev->list_node);
+        netdev_request_reconfigure(netdev);
+    } else {
+        VLOG_ERR("rte_vhost_driver_start failed for vhost user "
+                 "port: %s\n", name);
+    }
+    ovs_mutex_unlock(&dpdk_mutex);
 
 out:
     if (err) {
@@ -1695,7 +1693,6 @@ out:
         dev->vhost_id = NULL;
     }
 
-    ovs_mutex_unlock(&dpdk_mutex);
     VLOG_WARN_ONCE("dpdkvhostuser ports are considered deprecated;  "
                    "please migrate to dpdkvhostuserclient ports.");
     return err;
@@ -1704,15 +1701,21 @@ out:
 static int
 netdev_dpdk_vhost_client_construct(struct netdev *netdev)
 {
+    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
     int err;
 
-    ovs_mutex_lock(&dpdk_mutex);
     err = vhost_common_construct(netdev);
     if (err) {
         VLOG_ERR("vhost_common_construct failed for vhost user client"
                  "port: %s\n", netdev->name);
+        return err;
+    } else {
+        ovs_mutex_lock(&dpdk_mutex);
+        ovs_list_push_back(&dpdk_list, &dev->list_node);
+        netdev_request_reconfigure(netdev);
+        ovs_mutex_unlock(&dpdk_mutex);
     }
-    ovs_mutex_unlock(&dpdk_mutex);
+
     return err;
 }
 
@@ -1721,26 +1724,26 @@ netdev_dpdk_eth_construct(struct netdev *netdev)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
 
-    ovs_mutex_lock(&dpdk_mutex);
     common_construct(netdev, DPDK_ETH_PORT_ID_INVALID, SOCKET0);
+    ovs_mutex_init(&dev->mutex);
     dev->sw_stats->tx_retries = UINT64_MAX;
+
+    ovs_mutex_lock(&dpdk_mutex);
+    ovs_list_push_back(&dpdk_list, &dev->list_node);
+    netdev_request_reconfigure(netdev);
     ovs_mutex_unlock(&dpdk_mutex);
     return 0;
 }
 
 static void
 common_destruct(struct netdev_dpdk *dev)
-    OVS_REQUIRES(dpdk_mutex)
-    OVS_EXCLUDED(dev->mutex)
 {
     rte_free(dev->tx_q);
     dpdk_mp_put(dev->dpdk_mp);
 
-    ovs_list_remove(&dev->list_node);
     free(ovsrcu_get_protected(struct ingress_policer *,
                               &dev->ingress_policer));
     free(dev->sw_stats);
-    ovs_mutex_destroy(&dev->mutex);
 }
 
 static void dpdk_rx_steer_unconfigure(struct netdev_dpdk *);
@@ -1751,6 +1754,7 @@ netdev_dpdk_eth_destruct(struct netdev *netdev)
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
 
     ovs_mutex_lock(&dpdk_mutex);
+    ovs_list_remove(&dev->list_node);
 
     /* Destroy any rx-steering flows to allow RXQs to be removed. */
     dpdk_rx_steer_unconfigure(dev);
@@ -1813,12 +1817,12 @@ netdev_dpdk_eth_destruct(struct netdev *netdev)
             VLOG_INFO("Device '%s' has been removed", dev->devargs);
         }
     }
+    ovs_mutex_unlock(&dpdk_mutex);
 
     netdev_dpdk_clear_xstats(dev);
     free(dev->devargs);
     common_destruct(dev);
-
-    ovs_mutex_unlock(&dpdk_mutex);
+    ovs_mutex_destroy(&dev->mutex);
 }
 
 static void
@@ -1827,6 +1831,15 @@ netdev_dpdk_eth_dealloc(struct netdev *netdev)
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
 
     rte_free(dev);
+}
+
+static void
+vhost_common_destruct(struct netdev_dpdk *dev)
+    OVS_EXCLUDED(dev->mutex)
+{
+    rte_free(dev->vhost_rxq_enabled);
+    common_destruct(dev);
+    ovs_mutex_destroy(&dev->mutex);
 }
 
 /* rte_vhost_driver_unregister() can call back destroy_device(), which will
@@ -1859,14 +1872,12 @@ netdev_dpdk_vhost_destruct(struct netdev *netdev)
                  "socket '%s' must be restarted.", dev->vhost_id);
     }
 
+    ovs_list_remove(&dev->list_node);
+    ovs_mutex_unlock(&dpdk_mutex);
+
     vhost_id = dev->vhost_id;
     is_client_mode = dev->vhost_driver_flags & RTE_VHOST_USER_CLIENT;
     dev->vhost_id = NULL;
-    rte_free(dev->vhost_rxq_enabled);
-
-    common_destruct(dev);
-
-    ovs_mutex_unlock(&dpdk_mutex);
 
     if (!vhost_id) {
         goto out;
@@ -1881,6 +1892,7 @@ netdev_dpdk_vhost_destruct(struct netdev *netdev)
     }
 out:
     free(vhost_id);
+    vhost_common_destruct(dev);
 }
 
 static void
