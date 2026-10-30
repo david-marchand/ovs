@@ -2696,45 +2696,39 @@ netdev_doca_send(struct netdev *netdev, int qid,
     return 0;
 }
 
-#define NETDEV_DOCA_CLASS_COMMON                            \
-    .is_pmd = true,                                         \
-    .alloc = netdev_doca_alloc,                             \
-    .dealloc = netdev_doca_dealloc,                         \
-    .get_numa_id = netdev_dpdk_get_numa_id,                 \
-    .set_etheraddr = netdev_dpdk_set_etheraddr,             \
-    .get_etheraddr = netdev_dpdk_get_etheraddr,             \
-    .get_mtu = netdev_dpdk_get_mtu,                         \
-    .set_mtu = netdev_doca_set_mtu,                         \
-    .get_ifindex = netdev_dpdk_get_ifindex,                 \
-    .get_carrier_resets = netdev_dpdk_get_carrier_resets,   \
-    .set_miimon_interval = netdev_dpdk_set_miimon,          \
-    .update_flags = netdev_dpdk_update_flags,               \
-    .rxq_alloc = netdev_dpdk_rxq_alloc,                     \
-    .rxq_construct = netdev_dpdk_rxq_construct,             \
-    .rxq_destruct = netdev_dpdk_rxq_destruct,               \
-    .rxq_dealloc = netdev_dpdk_rxq_dealloc
-
-#define NETDEV_DOCA_CLASS_BASE                          \
-    NETDEV_DOCA_CLASS_COMMON,                           \
-    .init = netdev_doca_class_init,                     \
-    .destruct = netdev_doca_destruct,                   \
-    .set_tx_multiq = netdev_dpdk_set_tx_multiq,         \
-    .get_carrier = netdev_dpdk_get_carrier,             \
-    .get_stats = netdev_dpdk_get_stats,                 \
-    .get_custom_stats = netdev_doca_get_custom_stats,   \
-    .get_features = netdev_dpdk_get_features,           \
-    .get_speed = netdev_dpdk_get_speed,                 \
-    .get_status = netdev_doca_get_status,               \
-    .reconfigure = netdev_doca_reconfigure,             \
-    .rxq_recv = netdev_doca_rxq_recv
-
 static const struct netdev_class netdev_doca_class = {
     .type = "doca",
-    NETDEV_DOCA_CLASS_BASE,
+    .is_pmd = true,
+    .init = netdev_doca_class_init,
+    .alloc = netdev_doca_alloc,
     .construct = netdev_doca_construct,
+    .destruct = netdev_doca_destruct,
+    .dealloc = netdev_doca_dealloc,
     .get_config = netdev_dpdk_common_get_config,
     .set_config = netdev_doca_set_config,
+    .get_numa_id = netdev_dpdk_get_numa_id,
+    .set_tx_multiq = netdev_dpdk_set_tx_multiq,
     .send = netdev_doca_send,
+    .set_etheraddr = netdev_dpdk_set_etheraddr,
+    .get_etheraddr = netdev_dpdk_get_etheraddr,
+    .get_mtu = netdev_dpdk_get_mtu,
+    .set_mtu = netdev_doca_set_mtu,
+    .get_ifindex = netdev_dpdk_get_ifindex,
+    .get_carrier = netdev_dpdk_get_carrier,
+    .get_carrier_resets = netdev_dpdk_get_carrier_resets,
+    .get_stats = netdev_dpdk_get_stats,
+    .get_custom_stats = netdev_doca_get_custom_stats,
+    .get_features = netdev_dpdk_get_features,
+    .get_speed = netdev_dpdk_get_speed,
+    .get_status = netdev_doca_get_status,
+    .set_miimon_interval = netdev_dpdk_set_miimon,
+    .update_flags = netdev_dpdk_update_flags,
+    .reconfigure = netdev_doca_reconfigure,
+    .rxq_alloc = netdev_dpdk_rxq_alloc,
+    .rxq_construct = netdev_dpdk_rxq_construct,
+    .rxq_destruct = netdev_dpdk_rxq_destruct,
+    .rxq_dealloc = netdev_dpdk_rxq_dealloc,
+    .rxq_recv = netdev_doca_rxq_recv,
 };
 
 void
