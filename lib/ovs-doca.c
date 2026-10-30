@@ -20,8 +20,6 @@
 
 #include "vswitch-idl.h"
 
-#ifdef DOCA_NETDEV
-
 #include <errno.h>
 #include <infiniband/verbs.h>
 #include <string.h>
@@ -866,27 +864,3 @@ ovs_doca_status(const struct ovsrec_open_vswitch *cfg)
     ovsrec_open_vswitch_set_doca_version(cfg, doca_version_runtime());
 }
 
-#else /* DOCA_NETDEV */
-
-void
-ovs_doca_init(const struct smap *ovs_other_config OVS_UNUSED)
-{
-}
-
-void
-ovs_doca_print_version(void)
-{
-}
-
-void
-ovs_doca_status(const struct ovsrec_open_vswitch *cfg)
-{
-    if (!cfg) {
-        return;
-    }
-
-    ovsrec_open_vswitch_set_doca_initialized(cfg, false);
-    ovsrec_open_vswitch_set_doca_version(cfg, "none");
-}
-
-#endif /* DOCA_NETDEV */

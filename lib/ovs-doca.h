@@ -23,8 +23,6 @@
 #include "util.h"
 #include "vswitch-idl.h"
 
-#ifdef DOCA_NETDEV
-
 #include <doca_dev.h>
 #include <doca_flow.h>
 
@@ -101,8 +99,6 @@ doca_error_t ovs_doca_pipe_cfg_allow_queues(struct doca_flow_pipe_cfg *cfg,
                                             uint64_t queues_bitmap);
 
 unsigned int ovs_doca_max_counters(void);
-
-#endif /* DOCA_NETDEV */
 
 void ovs_doca_init(const struct smap *ovs_other_config);
 void ovs_doca_print_version(void);

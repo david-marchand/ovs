@@ -440,6 +440,7 @@ lib_libopenvswitch_la_SOURCES += \
 endif
 
 if DPDK_NETDEV
+AM_CPPFLAGS += -I $(top_srcdir)/lib/doca-stubs
 lib_libopenvswitch_la_SOURCES += \
 	lib/dpdk.c \
 	lib/dpif-offload-dpdk.c \
@@ -448,7 +449,22 @@ lib_libopenvswitch_la_SOURCES += \
 	lib/netdev-dpdk.c \
 	lib/netdev-dpdk-common.c \
 	lib/netdev-dpdk-common.h \
-	lib/netdev-dpdk-eth.h
+	lib/netdev-dpdk-eth.h \
+	lib/netdev-doca.c \
+	lib/netdev-doca.h \
+	lib/ovs-doca.c \
+	lib/ovs-doca.h \
+	lib/refmap.c \
+	lib/refmap.h \
+	lib/doca-stubs/doca_bitfield.h \
+	lib/doca-stubs/doca_compat.h \
+	lib/doca-stubs/doca_dev.h \
+	lib/doca-stubs/doca_dpdk.h \
+	lib/doca-stubs/doca_flow.h \
+	lib/doca-stubs/doca_flow_definitions.h \
+	lib/doca-stubs/doca_log.h \
+	lib/doca-stubs/doca_rdma_bridge.h \
+	lib/doca-stubs/doca_version.h
 else
 lib_libopenvswitch_la_SOURCES += \
 	lib/dpdk-stub.c
