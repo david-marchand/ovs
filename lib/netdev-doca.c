@@ -2513,6 +2513,244 @@ netdev_doca_send(struct netdev *netdev, int qid,
     return 0;
 }
 
+static int
+netdev_doca_get_numa_id(const struct netdev *netdev)
+{
+    struct netdev_doca *dev = netdev_doca_cast(netdev);
+
+    ovs_mutex_lock(&dev->mutex);
+    int numa = netdev_dpdk_common_get_numa_id(&dev->common);
+    ovs_mutex_unlock(&dev->mutex);
+
+    return numa;
+}
+
+static int
+netdev_doca_set_etheraddr(struct netdev *netdev, const struct eth_addr mac)
+{
+    struct netdev_doca *dev = netdev_doca_cast(netdev);
+
+    ovs_mutex_lock(&dev->mutex);
+    if (!eth_addr_equals(dev->requested_hwaddr, mac)) {
+        dev->requested_hwaddr = mac;
+        netdev_request_reconfigure(netdev);
+    }
+    ovs_mutex_unlock(&dev->mutex);
+
+    return 0;
+}
+
+static int
+netdev_doca_get_etheraddr(const struct netdev *netdev, struct eth_addr *mac)
+{
+    struct netdev_doca *dev = netdev_doca_cast(netdev);
+
+    ovs_mutex_lock(&dev->mutex);
+    netdev_dpdk_common_get_etheraddr(&dev->common, mac);
+    ovs_mutex_unlock(&dev->mutex);
+
+    return 0;
+}
+
+static int
+netdev_doca_get_mtu(const struct netdev *netdev, int *mtup)
+{
+    struct netdev_doca *dev = netdev_doca_cast(netdev);
+
+    ovs_mutex_lock(&dev->mutex);
+    netdev_dpdk_common_get_mtu(&dev->common, mtup);
+    ovs_mutex_unlock(&dev->mutex);
+
+    return 0;
+}
+
+static int
+netdev_doca_get_ifindex(const struct netdev *netdev)
+{
+    struct netdev_doca *dev = netdev_doca_cast(netdev);
+    int ifindex;
+
+    ovs_mutex_lock(&dev->mutex);
+    ifindex = netdev_dpdk_common_get_ifindex(&dev->common);
+    ovs_mutex_unlock(&dev->mutex);
+
+    return ifindex;
+}
+
+static int
+netdev_doca_get_carrier(const struct netdev *netdev, bool *carrier)
+{
+    struct netdev_doca *dev = netdev_doca_cast(netdev);
+
+    if (!dev->esw_eth) {
+        *carrier = false;
+        return 0;
+    }
+
+    *carrier = netdev_get_carrier(&dev->esw_eth->common.up);
+    return 0;
+}
+
+static long long int
+netdev_doca_get_carrier_resets(const struct netdev *netdev)
+{
+    struct netdev_doca *dev = netdev_doca_cast(netdev);
+
+    if (!dev->esw_eth) {
+        return 0;
+    }
+
+    return netdev_get_carrier_resets(&dev->esw_eth->common.up);
+}
+
+static int
+netdev_doca_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
+{
+    struct netdev_doca *dev = netdev_doca_cast(netdev);
+    struct netdev_doca_esw_ctx *esw_ctx = dev->esw_ctx;
+    struct netdev_dpdk_common *common = &dev->common;
+    dpdk_port_t port_id = dev->port_id;
+    uint64_t n_packets, n_bytes;
+
+    if (!dev->esw_eth) {
+        return EOPNOTSUPP;
+    }
+
+    if (!dev->is_representor) {
+        return netdev_get_stats(&dev->esw_eth->common.up, stats);
+    }
+
+    memset(stats, 0, sizeof *stats);
+
+    for (unsigned int i = 0; i < esw_ctx->n_rxq; i++) {
+        atomic_read_relaxed(&esw_ctx->port_queues[port_id][i].n_packets,
+                            &n_packets);
+        atomic_read_relaxed(&esw_ctx->port_queues[port_id][i].n_bytes,
+                            &n_bytes);
+        stats->rx_packets += n_packets;
+        stats->rx_bytes += n_bytes;
+    }
+
+    for (int i = 0; i < netdev->n_txq; i++) {
+        atomic_read_relaxed(&dev->sw_tx_stats[i].n_packets, &n_packets);
+        atomic_read_relaxed(&dev->sw_tx_stats[i].n_bytes, &n_bytes);
+        stats->tx_packets += n_packets;
+        stats->tx_bytes += n_bytes;
+    }
+
+    rte_spinlock_lock(&common->stats_lock);
+    stats->tx_dropped = common->stats.tx_dropped;
+    stats->rx_dropped = common->stats.rx_dropped;
+    rte_spinlock_unlock(&common->stats_lock);
+
+    return 0;
+}
+
+static int
+netdev_doca_get_features(const struct netdev *netdev,
+                         enum netdev_features *current,
+                         enum netdev_features *advertised,
+                         enum netdev_features *supported,
+                         enum netdev_features *peer)
+{
+    struct netdev_doca *dev = netdev_doca_cast(netdev);
+
+    if (!dev->esw_eth) {
+        return EOPNOTSUPP;
+    }
+
+    return netdev_get_features(&dev->esw_eth->common.up, current, advertised,
+                               supported, peer);
+}
+
+static int
+netdev_doca_get_speed(const struct netdev *netdev, uint32_t *current,
+                      uint32_t *max)
+{
+    struct netdev_doca *dev = netdev_doca_cast(netdev);
+
+    if (!dev->esw_eth) {
+        return EOPNOTSUPP;
+    }
+
+    return netdev_get_speed(&dev->esw_eth->common.up, current, max);
+}
+
+static int
+netdev_doca_set_tx_multiq(struct netdev *netdev, unsigned int n_txq)
+{
+    struct netdev_doca *dev = netdev_doca_cast(netdev);
+
+    ovs_mutex_lock(&dev->mutex);
+    if (dev->common.requested_n_txq != (int) n_txq) {
+        dev->common.requested_n_txq = n_txq;
+        netdev_request_reconfigure(netdev);
+    }
+    ovs_mutex_unlock(&dev->mutex);
+
+    return 0;
+}
+
+static int
+netdev_doca_set_miimon(struct netdev *netdev OVS_UNUSED,
+                       long long int interval OVS_UNUSED)
+{
+    return 0;
+}
+
+static int
+netdev_doca_update_flags(struct netdev *netdev, enum netdev_flags off,
+                         enum netdev_flags on, enum netdev_flags *old_flagsp)
+{
+    struct netdev_doca *dev = netdev_doca_cast(netdev);
+    struct netdev_dpdk_common *common = &dev->common;
+
+    ovs_mutex_lock(&dev->mutex);
+    *old_flagsp = common->flags;
+    common->flags |= on;
+    common->flags &= ~off;
+    ovs_mutex_unlock(&dev->mutex);
+
+    return 0;
+}
+
+static struct netdev_rxq *
+netdev_doca_rxq_alloc(void)
+{
+    struct netdev_rxq *rxq = dpdk_zmalloc(sizeof *rxq);
+
+    return rxq;
+}
+
+static int
+netdev_doca_rxq_construct(struct netdev_rxq *rxq OVS_UNUSED)
+{
+    return 0;
+}
+
+static void
+netdev_doca_rxq_destruct(struct netdev_rxq *rxq OVS_UNUSED)
+{
+}
+
+static void
+netdev_doca_rxq_dealloc(struct netdev_rxq *rxq)
+{
+    rte_free(rxq);
+}
+
+static int
+netdev_doca_get_config(const struct netdev *netdev, struct smap *args)
+{
+    struct netdev_doca *dev = netdev_doca_cast(netdev);
+
+    ovs_mutex_lock(&dev->mutex);
+    smap_add_format(args, "n_rxq", "%d", dev->common.requested_n_rxq);
+    ovs_mutex_unlock(&dev->mutex);
+
+    return 0;
+}
+
 static const struct netdev_class netdev_doca_class = {
     .type = "doca",
     .is_pmd = true,
@@ -2521,30 +2759,30 @@ static const struct netdev_class netdev_doca_class = {
     .construct = netdev_doca_construct,
     .destruct = netdev_doca_destruct,
     .dealloc = netdev_doca_dealloc,
-    .get_config = netdev_dpdk_common_get_config,
+    .get_config = netdev_doca_get_config,
     .set_config = netdev_doca_set_config,
-    .get_numa_id = netdev_dpdk_get_numa_id,
-    .set_tx_multiq = netdev_dpdk_set_tx_multiq,
+    .get_numa_id = netdev_doca_get_numa_id,
+    .set_tx_multiq = netdev_doca_set_tx_multiq,
     .send = netdev_doca_send,
-    .set_etheraddr = netdev_dpdk_set_etheraddr,
-    .get_etheraddr = netdev_dpdk_get_etheraddr,
-    .get_mtu = netdev_dpdk_get_mtu,
+    .set_etheraddr = netdev_doca_set_etheraddr,
+    .get_etheraddr = netdev_doca_get_etheraddr,
+    .get_mtu = netdev_doca_get_mtu,
     .set_mtu = netdev_doca_set_mtu,
-    .get_ifindex = netdev_dpdk_get_ifindex,
-    .get_carrier = netdev_dpdk_get_carrier,
-    .get_carrier_resets = netdev_dpdk_get_carrier_resets,
-    .get_stats = netdev_dpdk_get_stats,
+    .get_ifindex = netdev_doca_get_ifindex,
+    .get_carrier = netdev_doca_get_carrier,
+    .get_carrier_resets = netdev_doca_get_carrier_resets,
+    .get_stats = netdev_doca_get_stats,
     .get_custom_stats = netdev_doca_get_custom_stats,
-    .get_features = netdev_dpdk_get_features,
-    .get_speed = netdev_dpdk_get_speed,
+    .get_features = netdev_doca_get_features,
+    .get_speed = netdev_doca_get_speed,
     .get_status = netdev_doca_get_status,
-    .set_miimon_interval = netdev_dpdk_set_miimon,
-    .update_flags = netdev_dpdk_update_flags,
+    .set_miimon_interval = netdev_doca_set_miimon,
+    .update_flags = netdev_doca_update_flags,
     .reconfigure = netdev_doca_reconfigure,
-    .rxq_alloc = netdev_dpdk_rxq_alloc,
-    .rxq_construct = netdev_dpdk_rxq_construct,
-    .rxq_destruct = netdev_dpdk_rxq_destruct,
-    .rxq_dealloc = netdev_dpdk_rxq_dealloc,
+    .rxq_alloc = netdev_doca_rxq_alloc,
+    .rxq_construct = netdev_doca_rxq_construct,
+    .rxq_destruct = netdev_doca_rxq_destruct,
+    .rxq_dealloc = netdev_doca_rxq_dealloc,
     .rxq_recv = netdev_doca_rxq_recv,
 };
 
