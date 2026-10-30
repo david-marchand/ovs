@@ -1057,6 +1057,9 @@ netdev_doca_set_mtu(struct netdev *netdev, int mtu)
         }
 
         common->requested_mtu = mtu;
+        if (dev->esw_eth) {
+            netdev_set_mtu(&dev->esw_eth->common.up, mtu);
+        }
         netdev_request_reconfigure(netdev);
     }
 
@@ -1165,7 +1168,6 @@ netdev_doca_class_init(void)
         return 0;
     }
 
-    ovs_thread_create("doca_watchdog", netdev_dpdk_watchdog, &doca_list);
     netdev_doca_esw_rfm = refmap_create("netdev-doca-esw",
                                         sizeof(struct netdev_doca_esw_key),
                                         sizeof(struct netdev_doca_esw_ctx),
@@ -1323,7 +1325,6 @@ netdev_doca_rep_stop(struct netdev_doca *dev)
     netdev_doca_port_stop(dev);
     netdev_doca_dev_close(dev);
     dev->port_id = DPDK_ETH_PORT_ID_INVALID;
-    dev->esw_mgr_port_id = DPDK_ETH_PORT_ID_INVALID;
     dev->attached = false;
 
     return true;
@@ -1374,10 +1375,6 @@ netdev_doca_port_stop(struct netdev_doca *dev)
         dev->dev_rep = NULL;
     }
 
-    if (dev->port_id != DPDK_ETH_PORT_ID_INVALID) {
-        rte_eth_dev_stop(dev->port_id);
-    }
-
     return err;
 }
 
@@ -1397,13 +1394,12 @@ netdev_doca_destruct(struct netdev *netdev)
         VLOG_INFO("%s: Device '%s' has been removed", netdev_get_name(netdev),
                   dev->devargs);
     }
-
-    if (!dev->is_representor) {
-        netdev_dpdk_mempool_release(dev->common.dpdk_mp);
-    }
-
     ovs_list_remove(&dev->list_node);
     ovs_mutex_unlock(&doca_mutex);
+
+    if (dev->esw_eth) {
+        netdev_close(&dev->esw_eth->common.up);
+    }
 
     free(dev->sw_tx_stats);
     free(dev->peer_name);
@@ -1559,135 +1555,13 @@ netdev_doca_get_custom_stats(const struct netdev *netdev,
 static int
 netdev_doca_get_status(const struct netdev *netdev, struct smap *args)
 {
-    return netdev_dpdk_get_eth_dev_status(netdev, args);
-}
+    struct netdev_doca *dev = netdev_doca_cast(netdev);
 
-/* Mempools are allocated for ESW managers only. */
-static int
-netdev_doca_mempool_configure(struct netdev_doca *dev)
-    OVS_REQUIRES(dev->mutex)
-{
-    struct netdev_dpdk_common *common = &dev->common;
-    uint32_t buf_size = netdev_dpdk_buf_size(common->requested_mtu);
-    const char *netdev_name = netdev_get_name(&common->up);
-    struct dpdk_mp *dmp;
-    int mtu;
-
-    if (dev->is_representor) {
-        struct netdev_doca *esw_dev;
-
-        esw_dev = netdev_doca_cast(dev->esw_ctx->esw_netdev);
-
-        common->dpdk_mp = esw_dev->common.dpdk_mp;
-        common->mtu = esw_dev->common.mtu;
-        common->requested_mtu = common->mtu;
-        common->max_packet_len = esw_dev->common.max_packet_len;
-        return 0;
+    if (!dev->esw_eth) {
+        return ENODEV;
     }
 
-    mtu = FRAME_LEN_TO_MTU(buf_size);
-    dmp = netdev_dpdk_mempool_create(common, true, mtu);
-    if (!dmp) {
-        VLOG_ERR("%s: Failed to create mempool", netdev_name);
-        return ENOMEM;
-    }
-
-    if (common->dpdk_mp) {
-        netdev_dpdk_mempool_release(common->dpdk_mp);
-    }
-
-    common->dpdk_mp = dmp;
-    common->mtu = common->requested_mtu;
-    common->socket_id = common->requested_socket_id;
-    common->max_packet_len = MTU_TO_FRAME_LEN(common->mtu);
-
-    return 0;
-}
-
-static int
-doca_eth_dev_port_config_complete(struct netdev_doca *dev,
-                                  int n_rxq, int n_txq)
-{
-    struct netdev_dpdk_common *common = &dev->common;
-    uint16_t conf_mtu;
-    int diag;
-
-    free(dev->sw_tx_stats);
-    dev->sw_tx_stats = xcalloc(n_txq, sizeof *dev->sw_tx_stats);
-    for (int i = 0; i < n_txq; i++) {
-        atomic_init(&dev->sw_tx_stats[i].n_packets, 0);
-        atomic_init(&dev->sw_tx_stats[i].n_bytes, 0);
-    }
-
-    common->up.n_rxq = n_rxq;
-    common->up.n_txq = n_txq;
-
-    diag = rte_eth_dev_set_mtu(dev->port_id, common->mtu);
-    if (diag) {
-        /* A device may not support rte_eth_dev_set_mtu, in this case
-         * flag a warning to the user and include the devices configured
-         * MTU value that will be used instead. */
-        if (-ENOTSUP == diag) {
-            rte_eth_dev_get_mtu(dev->port_id, &conf_mtu);
-            VLOG_WARN("Interface %s does not support MTU configuration, "
-                      "max packet size supported is %"PRIu16".",
-                      common->up.name, conf_mtu);
-        } else {
-            VLOG_ERR("Interface %s MTU (%d) setup error: %s",
-                     common->up.name, common->mtu, rte_strerror(-diag));
-        }
-    }
-
-    return diag;
-}
-
-static int
-doca_eth_dev_port_config(struct netdev_doca *dev,
-                         const struct rte_eth_dev_info *info,
-                         int n_rxq, int n_txq)
-{
-    struct netdev_dpdk_common *common = &dev->common;
-    struct rte_eth_conf conf = dpdk_default_eth_conf;
-    int diag;
-    int i;
-
-    netdev_dpdk_build_port_conf(common, info, &conf);
-
-    if (dev->is_representor) {
-        rte_eth_dev_configure(common->port_id, 0, 0, &conf);
-        return doca_eth_dev_port_config_complete(dev, n_rxq, n_txq);
-    }
-
-    diag = rte_eth_dev_configure(dev->port_id, n_rxq,
-                                 n_txq, &conf);
-    if (diag) {
-        VLOG_WARN("Interface %s eth_dev setup error %s",
-                  common->up.name, rte_strerror(-diag));
-        return diag;
-    }
-
-    for (i = 0; i < n_txq; i++) {
-        diag = rte_eth_tx_queue_setup(dev->port_id, i, common->txq_size,
-                                      common->socket_id, NULL);
-        if (diag) {
-            VLOG_INFO("Interface %s unable to setup txq(%d): %s",
-                      common->up.name, i, rte_strerror(-diag));
-            return diag;
-        }
-    }
-
-    for (i = 0; i < n_rxq; i++) {
-        diag = rte_eth_rx_queue_setup(dev->port_id, i, common->rxq_size,
-                                      common->socket_id, NULL,
-                                      common->dpdk_mp->mp);
-        if (diag) {
-            VLOG_INFO("Interface %s unable to setup rxq(%d): %s",
-                      common->up.name, i, rte_strerror(-diag));
-            return diag;
-        }
-    }
-
-    return doca_eth_dev_port_config_complete(dev, n_rxq, n_txq);
+    return netdev_get_status(&dev->esw_eth->common.up, args);
 }
 
 static int
@@ -1782,7 +1656,7 @@ netdev_doca_port_start(struct netdev_doca *dev)
     struct netdev_doca_esw_ctx *esw;
     int err;
 
-    if (!rte_eth_dev_is_valid_port(dev->esw_mgr_port_id)) {
+    if (!dev->esw_eth) {
         VLOG_ERR("Cannot start port "DPDK_PORT_ID_FMT" '%s', invalid ESW "
                  "port", port_id,
                  devargs);
@@ -1855,15 +1729,6 @@ netdev_doca_port_start(struct netdev_doca *dev)
             goto out;
         }
 
-        err = rte_eth_dev_start(dev->port_id);
-        if (err) {
-            VLOG_ERR("Failed to start dpdk port_id "DPDK_PORT_ID_FMT
-                     ". Error: %s", dev->port_id,
-                     rte_strerror(-err));
-            err = DOCA_ERROR_DRIVER;
-            goto out;
-        }
-
         err = doca_flow_port_cfg_set_nr_resources(port_cfg,
                                                   DOCA_FLOW_RESOURCE_COUNTER,
                                                   ovs_doca_max_counters());
@@ -1924,36 +1789,8 @@ doca_eth_dev_init(struct netdev_doca *dev)
     struct netdev_dpdk_common *common = &dev->common;
     struct netdev *netdev = &common->up;
     struct rte_ether_addr eth_addr;
-    struct rte_eth_dev_info info;
-    int n_rxq, n_txq;
     int diag;
 
-    diag = rte_eth_dev_info_get(dev->port_id, &info);
-    if (diag < 0) {
-        VLOG_ERR("Interface %s rte_eth_dev_info_get error: %s",
-                 netdev_get_name(netdev), rte_strerror(-diag));
-        return -diag;
-    }
-
-    dev->is_representor = dev->devargs
-        && strstr(dev->devargs, "representor=");
-
-    netdev_dpdk_detect_hw_ol_features(common, &info);
-
-    n_rxq = MIN(info.max_rx_queues, common->up.n_rxq);
-    n_txq = MIN(info.max_tx_queues, common->up.n_txq);
-
-    diag = doca_eth_dev_port_config(dev, &info, n_rxq, n_txq);
-    if (diag) {
-        VLOG_ERR("Interface %s(rxq:%d txq:%d lsc interrupt mode:%s) "
-                 "configure error: %s",
-                 netdev_get_name(netdev), n_rxq, n_txq,
-                 dev->lsc_interrupt_mode ? "true" : "false",
-                 rte_strerror(-diag));
-        return -diag;
-    }
-
-    dev->attached = true;
     diag = netdev_doca_port_start(dev);
     if (diag != DOCA_SUCCESS) {
         VLOG_ERR("Failed to init DOCA port %s port_id "DPDK_PORT_ID_FMT
@@ -1964,8 +1801,6 @@ doca_eth_dev_init(struct netdev_doca *dev)
 
     atomic_store_explicit(&dev->started, true, memory_order_release);
 
-    netdev_dpdk_configure_xstats(&dev->common);
-
     memset(&eth_addr, 0x0, sizeof(eth_addr));
     rte_eth_macaddr_get(dev->port_id, &eth_addr);
 
@@ -1973,9 +1808,6 @@ doca_eth_dev_init(struct netdev_doca *dev)
                 dev->port_id, ETH_ADDR_BYTES_ARGS(eth_addr.addr_bytes));
 
     memcpy(common->hwaddr.ea, eth_addr.addr_bytes, ETH_ADDR_LEN);
-    if (rte_eth_link_get_nowait(dev->port_id, &common->link) < 0) {
-        memset(&common->link, 0, sizeof common->link);
-    }
 
     /* Upon success of esw_mgr port, update the representor's field of it. */
     if (!dev->is_representor) {
@@ -1994,37 +1826,38 @@ netdev_doca_reconfigure(struct netdev *netdev)
 
     /* If an ESW manager is not attached to OVS, a representor cannot be
      * configured. */
-    if (dev->is_representor &&
-        !rte_eth_dev_is_valid_port(dev->esw_mgr_port_id)) {
+    if (!dev->esw_eth) {
         return EOPNOTSUPP;
     }
 
     ovs_mutex_lock(&doca_mutex);
     ovs_mutex_lock(&dev->mutex);
 
-    common->requested_n_rxq = common->user_n_rxq;
-
     if (netdev->n_txq == common->requested_n_txq
         && netdev->n_rxq == common->requested_n_rxq
         && common->mtu == common->requested_mtu
-        && dev->lsc_interrupt_mode == dev->requested_lsc_interrupt_mode
-        && common->rxq_size == common->requested_rxq_size
-        && common->txq_size == common->requested_txq_size
         && eth_addr_equals(common->hwaddr, dev->requested_hwaddr)
         && common->socket_id == common->requested_socket_id
-        && netdev_doca_is_started(dev)) {
+        && netdev_doca_is_started(dev)
+        && !netdev_is_reconf_required(&dev->esw_eth->common.up)) {
         /* Reconfiguration is unnecessary. */
         goto out;
     }
 
     netdev_doca_port_stop(dev);
 
-    err = netdev_doca_mempool_configure(dev);
-    if (err) {
-        goto out;
+    if (!dev->is_representor
+        && netdev_is_reconf_required(&dev->esw_eth->common.up)) {
+        netdev_reconfigure(&dev->esw_eth->common.up);
     }
 
-    dev->lsc_interrupt_mode = dev->requested_lsc_interrupt_mode;
+    /* DOCA ports use esw_eth's mempool for packet allocation. */
+    common->dpdk_mp = dev->esw_eth->common.dpdk_mp;
+    common->mtu = dev->esw_eth->common.mtu;
+    common->max_packet_len = dev->esw_eth->common.max_packet_len;
+    common->hw_ol_features = dev->esw_eth->common.hw_ol_features;
+    netdev_dpdk_common_update_ol_flags(common);
+    common->socket_id = common->requested_socket_id;
 
     netdev->n_txq = common->requested_n_txq;
     netdev->n_rxq = common->requested_n_rxq;
@@ -2042,26 +1875,13 @@ netdev_doca_reconfigure(struct netdev *netdev)
         netdev->n_rxq = esw_n_rxq;
     }
 
-    common->rxq_size = common->requested_rxq_size;
-    common->txq_size = common->requested_txq_size;
-
     rte_free(common->tx_q);
     common->tx_q = NULL;
-
-    if (!eth_addr_equals(common->hwaddr, dev->requested_hwaddr)) {
-        err = netdev_dpdk_set_dev_etheraddr(&dev->common,
-                                            dev->requested_hwaddr);
-        if (err) {
-            goto out;
-        }
-    }
 
     err = doca_eth_dev_init(dev);
     if (err) {
         goto out;
     }
-
-    netdev_dpdk_update_netdev_flags(&dev->common);
 
     /* If both requested and actual hw-addr were previously
      * unset (initialized to 0), then first device init above
@@ -2074,9 +1894,13 @@ netdev_doca_reconfigure(struct netdev *netdev)
      * will have succeeded to get to this point. */
     dev->requested_hwaddr = common->hwaddr;
 
+    free(dev->sw_tx_stats);
+    dev->sw_tx_stats = xzalloc(netdev->n_txq * sizeof *dev->sw_tx_stats);
+
     common->tx_q = dpdk_zmalloc(netdev->n_txq * sizeof *common->tx_q);
     if (!common->tx_q) {
         err = ENOMEM;
+        goto out;
     }
 
     netdev_change_seq_changed(netdev);
@@ -2096,6 +1920,7 @@ netdev_doca_construct(struct netdev *netdev)
 
     ovs_mutex_init(&dev->mutex);
     dev->port_id = DPDK_ETH_PORT_ID_INVALID;
+    dev->esw_eth = NULL;
     dev->devargs = NULL;
     dev->attached = false;
     dev->sw_tx_stats = NULL;
@@ -2310,11 +2135,10 @@ netdev_doca_lookup_by_port_id(dpdk_port_t port_id)
 
 static dpdk_port_t
 netdev_doca_find_esw_mgr_port_id(dpdk_port_t dev_port_id)
-    OVS_REQUIRES(doca_mutex)
 {
     struct rte_eth_dev_info info;
-    struct netdev_doca *dev;
-    uint16_t domain_id;
+    struct rte_eth_dev_info port_info;
+    dpdk_port_t port_id;
 
     if (!rte_eth_dev_is_valid_port(dev_port_id)) {
         return DPDK_ETH_PORT_ID_INVALID;
@@ -2326,28 +2150,93 @@ netdev_doca_find_esw_mgr_port_id(dpdk_port_t dev_port_id)
         return DPDK_ETH_PORT_ID_INVALID;
     }
 
-    domain_id = info.switch_info.domain_id;
-    LIST_FOR_EACH (dev, list_node, &doca_list) {
-        if (!rte_eth_dev_is_valid_port(dev->port_id)) {
+    if (!(*info.dev_flags & RTE_ETH_DEV_REPRESENTOR)) {
+        return dev_port_id;
+    }
+
+    RTE_ETH_FOREACH_DEV (port_id) {
+        if (rte_eth_dev_info_get(port_id, &port_info) < 0) {
             continue;
         }
 
-        if (rte_eth_dev_info_get(dev->port_id, &info) < 0) {
-            VLOG_DBG_RL(&rl, "Failed to retrieve device info for port "
-                        DPDK_PORT_ID_FMT, dev->port_id);
-            continue;
-        }
-
-        if (info.switch_info.domain_id == domain_id &&
-            !(*info.dev_flags & RTE_ETH_DEV_REPRESENTOR)) {
+        if (port_info.switch_info.domain_id
+                == info.switch_info.domain_id
+            && !(*port_info.dev_flags & RTE_ETH_DEV_REPRESENTOR)) {
             VLOG_DBG("Found ESW manager port "DPDK_PORT_ID_FMT" for "
-                     "device "DPDK_PORT_ID_FMT, dev->port_id,
+                     "device "DPDK_PORT_ID_FMT, port_id,
                      dev_port_id);
-            return dev->port_id;
+            return port_id;
         }
     }
 
     return DPDK_ETH_PORT_ID_INVALID;
+}
+
+static int
+netdev_doca_acquire_esw_eth(struct netdev_doca *dev)
+    OVS_REQUIRES(doca_mutex)
+{
+    struct rte_eth_dev_info info;
+    char esw_name[128];
+    struct netdev *esw_netdev;
+    dpdk_port_t esw_port_id;
+    struct smap config;
+    const char *bus_info;
+    int err;
+
+    if (dev->esw_eth) {
+        return 0;
+    }
+
+    esw_port_id = netdev_doca_find_esw_mgr_port_id(dev->port_id);
+    if (esw_port_id == DPDK_ETH_PORT_ID_INVALID) {
+        VLOG_WARN("Could not find ESW manager for port "DPDK_PORT_ID_FMT,
+                  dev->port_id);
+        return ENODEV;
+    }
+
+    if (rte_eth_dev_info_get(esw_port_id, &info) < 0) {
+        return ENODEV;
+    }
+
+    bus_info = rte_dev_bus_info(info.device);
+    if (!bus_info) {
+        return ENODEV;
+    }
+
+    snprintf(esw_name, sizeof esw_name, "doca-esw-%s", bus_info);
+
+    err = netdev_open(esw_name, "dpdk", &esw_netdev);
+    if (err) {
+        VLOG_WARN("Failed to open ESW manager netdev '%s': %s",
+                  esw_name, ovs_strerror(err));
+        return err;
+    }
+
+    smap_init(&config);
+    smap_add(&config, "dpdk-devargs", bus_info);
+    err = netdev_set_config(esw_netdev, &config, NULL);
+    smap_destroy(&config);
+    if (err) {
+        VLOG_WARN("Failed to configure ESW manager netdev '%s': %s",
+                  esw_name, ovs_strerror(err));
+        netdev_close(esw_netdev);
+        return err;
+    }
+
+    err = netdev_reconfigure(esw_netdev);
+    if (err) {
+        VLOG_WARN("Failed to reconfigure ESW manager netdev '%s': %s",
+                  esw_name, ovs_strerror(err));
+        netdev_close(esw_netdev);
+        return err;
+    }
+
+    dev->esw_eth = netdev_dpdk_eth_cast(esw_netdev);
+    VLOG_INFO("Acquired ESW manager '%s' (port "DPDK_PORT_ID_FMT") for "
+              "port "DPDK_PORT_ID_FMT, esw_name, esw_port_id,
+              dev->port_id);
+    return 0;
 }
 
 static int
@@ -2358,7 +2247,6 @@ netdev_doca_set_config(struct netdev *netdev, const struct smap *args,
     struct netdev_dpdk_common *common = &dev->common;
     const char *netdev_name = netdev_get_name(netdev);
     char generated[PATH_MAX];
-    bool lsc_interrupt_mode;
     const char *new_devargs;
     char iface[IFNAMSIZ];
     const char *vf_mac;
@@ -2383,29 +2271,9 @@ netdev_doca_set_config(struct netdev *netdev, const struct smap *args,
     }
 
     is_rep = strstr(dev->devargs, "representor=");
-    if (is_rep) {
-        struct netdev_doca_esw_key esw_key;
-        struct netdev_doca_esw_ctx *esw;
+    dev->is_representor = is_rep;
 
-        if (netdev_doca_esw_key_parse(dev->devargs, &esw_key)) {
-            VLOG_ERR("%s: ESW_key parsing failed for %s",
-                     netdev_name, dev->devargs);
-            err = EINVAL;
-            goto out;
-        }
-
-        esw = refmap_try_ref(netdev_doca_esw_rfm, &esw_key);
-        if (!esw) {
-            goto out;
-        }
-
-        refmap_unref(netdev_doca_esw_rfm, esw);
-    }
-
-    netdev_dpdk_set_rxq_config(common, args);
-
-    /* Don't process dpdk-devargs if value is unchanged and port id
-     * is valid. */
+    /* Don't process devargs if port id is already valid and attached. */
     if (!(rte_eth_dev_is_valid_port(dev->port_id) && dev->attached)) {
         dpdk_port_t new_port_id =
             netdev_doca_process_devargs(dev, dev->devargs, errp);
@@ -2430,16 +2298,29 @@ netdev_doca_set_config(struct netdev *netdev, const struct smap *args,
 
                 common->requested_socket_id = sid < 0 ? SOCKET0 : sid;
                 dev->port_id = new_port_id;
-                dev->esw_mgr_port_id =
-                    netdev_doca_find_esw_mgr_port_id(new_port_id);
-                netdev_request_reconfigure(&common->up);
-                err = 0;
+
+                err = netdev_doca_acquire_esw_eth(dev);
+                if (!err) {
+                    netdev_request_reconfigure(netdev);
+                }
             }
         }
     }
 
     if (err) {
         goto out;
+    }
+
+    if (!dev->is_representor && dev->esw_eth) {
+        struct smap esw_config;
+
+        smap_clone(&esw_config, args);
+        smap_replace(&esw_config, "dpdk-devargs", dev->esw_eth->devargs);
+        err = netdev_set_config(&dev->esw_eth->common.up, &esw_config, errp);
+        smap_destroy(&esw_config);
+        if (err) {
+            goto out;
+        }
     }
 
     vf_mac = smap_get(args, "dpdk-vf-mac");
@@ -2461,12 +2342,6 @@ netdev_doca_set_config(struct netdev *netdev, const struct smap *args,
             dev->requested_hwaddr = mac;
             netdev_request_reconfigure(netdev);
         }
-    }
-
-    lsc_interrupt_mode = smap_get_bool(args, "dpdk-lsc-interrupt", false);
-    if (dev->requested_lsc_interrupt_mode != lsc_interrupt_mode) {
-        dev->requested_lsc_interrupt_mode = lsc_interrupt_mode;
-        netdev_request_reconfigure(netdev);
     }
 
 out:
@@ -2537,7 +2412,8 @@ netdev_doca_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
         struct dp_packet_batch rx_batch;
 
         dp_packet_batch_init(&rx_batch);
-        if (!netdev_dpdk_eth_rx_burst(NULL, rxq->queue_id, &rx_batch)) {
+        if (!netdev_dpdk_eth_rx_burst(dev->esw_eth, rxq->queue_id,
+                                      &rx_batch)) {
             return EAGAIN;
         }
 
@@ -2617,7 +2493,8 @@ netdev_doca_send(struct netdev *netdev, int qid,
                        &old_count);
     atomic_add_relaxed(&dev->sw_tx_stats[qid].n_bytes, n_bytes, &old_count);
 
-    dropped = netdev_dpdk_eth_tx_burst(NULL, qid, pkts, cnt);
+    dropped = netdev_dpdk_eth_tx_burst(dev->esw_eth, qid, pkts, cnt);
+
     stats.tx_failure_drops += dropped;
     dropped += batch_cnt - cnt;
     if (OVS_UNLIKELY(dropped)) {

@@ -97,7 +97,7 @@ struct netdev_doca {
     PADDED_MEMBERS(CACHE_LINE_SIZE,
         dpdk_port_t port_id;
         atomic_bool started;
-        dpdk_port_t esw_mgr_port_id;
+        struct netdev_dpdk_eth *esw_eth;
         struct netdev_doca_tx_stats *sw_tx_stats;
 
         /* No datapath fields below for this block. */
@@ -118,8 +118,6 @@ struct netdev_doca {
     /* In doca_list. */
     struct ovs_list list_node OVS_GUARDED_BY(doca_mutex);
 
-    bool requested_lsc_interrupt_mode;
-    bool lsc_interrupt_mode;
     struct doca_flow_pipe_entry *rss_entries[NETDEV_DOCA_RSS_NUM_ENTRIES];
     struct doca_flow_pipe_entry *egress_entry;
     char *peer_name;
