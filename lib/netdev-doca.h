@@ -24,6 +24,7 @@
 #include <doca_flow.h>
 
 #include "netdev-dpdk-common.h"
+#include "netdev-dpdk-eth.h"
 #include "netdev-provider.h"
 #include "ovs-doca.h"
 #include "util.h"
@@ -93,21 +94,37 @@ struct netdev_doca_esw_ctx {
 };
 
 struct netdev_doca {
-    struct netdev_dpdk_common common;
+    PADDED_MEMBERS(CACHE_LINE_SIZE,
+        dpdk_port_t port_id;
+        atomic_bool started;
+        dpdk_port_t esw_mgr_port_id;
+        struct netdev_doca_tx_stats *sw_tx_stats;
 
-    dpdk_port_t esw_mgr_port_id;
-    struct netdev_doca_tx_stats *sw_tx_stats;
+        /* No datapath fields below for this block. */
 
-    PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline10,
         struct doca_flow_port *port;
         struct netdev_doca_esw_ctx *esw_ctx;
-        struct doca_flow_pipe_entry *rss_entries[NETDEV_DOCA_RSS_NUM_ENTRIES];
-        struct doca_flow_pipe_entry *egress_entry;
-        char *peer_name;
-        struct doca_dev_rep *dev_rep;
+        char *devargs;
+        bool attached;
+        bool is_representor;
+        struct eth_addr requested_hwaddr;
     );
+
+    struct netdev_dpdk_common common;
+
+    /* No datapath fields below for the rest of the structure. */
+
+    struct ovs_mutex mutex OVS_ACQ_AFTER(doca_mutex);
+    /* In doca_list. */
+    struct ovs_list list_node OVS_GUARDED_BY(doca_mutex);
+
+    bool requested_lsc_interrupt_mode;
+    bool lsc_interrupt_mode;
+    struct doca_flow_pipe_entry *rss_entries[NETDEV_DOCA_RSS_NUM_ENTRIES];
+    struct doca_flow_pipe_entry *egress_entry;
+    char *peer_name;
+    struct doca_dev_rep *dev_rep;
 };
-BUILD_ASSERT_DECL(offsetof(struct netdev_doca, common) == 0);
 
 void netdev_doca_register(void);
 
