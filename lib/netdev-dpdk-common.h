@@ -36,7 +36,20 @@
 #include "packets.h"
 #include "util.h"
 
-struct dpdk_tx_queue;
+/* There should be one 'struct dpdk_tx_queue' created for
+ * each netdev tx queue. */
+struct dpdk_tx_queue {
+    /* Padding to make dpdk_tx_queue exactly one cache line long. */
+    PADDED_MEMBERS(CACHE_LINE_SIZE,
+        /* Protects the members and the NIC queue from concurrent access.
+         * It is used only if the queue is shared among different pmd threads
+         * (see 'concurrent_txq'). */
+        rte_spinlock_t tx_lock;
+        /* Mapping of configured vhost-user queue to enabled by guest. */
+        int map;
+    );
+};
+
 struct dpdk_qos_ingress_policer;
 struct dpdk_qos_conf;
 struct smap;
@@ -253,6 +266,27 @@ struct dp_packet *dpdk_copy_dp_packet_to_mbuf(struct rte_mempool *,
                                               struct dp_packet *);
 size_t dpdk_copy_batch_to_mbuf(struct netdev_dpdk_common *,
                                struct dp_packet_batch *);
+
+static inline void
+netdev_dpdk_batch_init_packet_fields(struct dp_packet_batch *batch)
+{
+    struct dp_packet *packet;
+
+    DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
+        /* Datapath does not support multi-segment buffers. */
+        ovs_assert(packet->mbuf.nb_segs == 1);
+
+        dp_packet_reset_cutlen(packet);
+        packet->packet_type = htonl(PT_ETH);
+        packet->has_hash = !!(packet->mbuf.ol_flags & RTE_MBUF_F_RX_RSS_HASH);
+        packet->has_mark = !!(packet->mbuf.ol_flags & RTE_MBUF_F_RX_FDIR_ID);
+        packet->offloads =
+            packet->mbuf.ol_flags & (RTE_MBUF_F_RX_IP_CKSUM_BAD
+                                     | RTE_MBUF_F_RX_IP_CKSUM_GOOD
+                                     | RTE_MBUF_F_RX_L4_CKSUM_BAD
+                                     | RTE_MBUF_F_RX_L4_CKSUM_GOOD);
+    }
+}
 
 /* Prepare the packet for HWOL.
  * Return True if the packet is OK to continue. */
