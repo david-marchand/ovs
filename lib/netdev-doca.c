@@ -95,14 +95,12 @@ static void
 netdev_doca_destruct(struct netdev *netdev);
 
 static int
-netdev_doca_port_stop(struct netdev *netdev)
+netdev_doca_port_stop(struct netdev_doca *)
     OVS_REQUIRES(dpdk_common_mutex);
 
 static dpdk_port_t
-netdev_doca_get_esw_mgr_port_id(const struct netdev *netdev)
+netdev_doca_get_esw_mgr_port_id(const struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
-
     if (!rte_eth_dev_is_valid_port(dev->common.port_id) ||
         !rte_eth_dev_is_valid_port(dev->esw_mgr_port_id)) {
         return DPDK_ETH_PORT_ID_INVALID;
@@ -112,10 +110,8 @@ netdev_doca_get_esw_mgr_port_id(const struct netdev *netdev)
 }
 
 static dpdk_port_t
-netdev_doca_get_port_id(const struct netdev *netdev)
+netdev_doca_get_port_id(const struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
-
     if (!rte_eth_dev_is_valid_port(dev->common.port_id)) {
         return DPDK_ETH_PORT_ID_INVALID;
     }
@@ -124,18 +120,17 @@ netdev_doca_get_port_id(const struct netdev *netdev)
 }
 
 static bool
-netdev_doca_is_esw_mgr(const struct netdev *netdev)
+netdev_doca_is_esw_mgr(const struct netdev_doca *dev)
 {
-    dpdk_port_t esw_mgr_id = netdev_doca_get_esw_mgr_port_id(netdev);
+    dpdk_port_t esw_mgr_id = netdev_doca_get_esw_mgr_port_id(dev);
 
-    return esw_mgr_id == netdev_doca_get_port_id(netdev) &&
+    return esw_mgr_id == netdev_doca_get_port_id(dev) &&
            esw_mgr_id != DPDK_ETH_PORT_ID_INVALID;
 }
 
 static int
-netdev_doca_egress_pipe_init(struct netdev *netdev)
+netdev_doca_egress_pipe_init(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct ovs_doca_flow_match match;
     struct doca_flow_monitor monitor;
     struct doca_flow_fwd fwd;
@@ -152,25 +147,23 @@ netdev_doca_egress_pipe_init(struct netdev *netdev)
     memset(&fwd.port_id, 0xFF, sizeof fwd.port_id);
     monitor.counter_type = DOCA_FLOW_RESOURCE_TYPE_NON_SHARED;
 
-    return ovs_doca_pipe_create(&dev->common.up, &match, NULL, &monitor, NULL,
+    return ovs_doca_pipe_create(dev, &match, NULL, &monitor, NULL,
                                 NULL, NULL, &fwd, NULL, RTE_MAX_ETHPORTS, true,
                                 true, UINT64_C(1) << AUX_QUEUE, "EGRESS",
                                 &dev->esw_ctx->egress_pipe);
 }
 
 static void
-netdev_doca_egress_pipe_uninit(struct netdev *netdev)
+netdev_doca_egress_pipe_uninit(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct netdev_doca_esw_ctx *esw = dev->esw_ctx;
 
     ovs_doca_destroy_pipe(&esw->egress_pipe);
 }
 
 static int
-netdev_doca_rss_pipe_init(struct netdev *netdev)
+netdev_doca_rss_pipe_init(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct ovs_doca_flow_actions actions;
     struct ovs_doca_flow_match match;
     struct doca_flow_monitor monitor;
@@ -197,7 +190,7 @@ netdev_doca_rss_pipe_init(struct netdev *netdev)
     fwd.rss_type = DOCA_FLOW_RESOURCE_TYPE_NON_SHARED;
     memset(&fwd.rss.nr_queues, 0xFF, sizeof fwd.rss.nr_queues);
 
-    rv = ovs_doca_pipe_create(&dev->common.up, &match, NULL, &monitor,
+    rv = ovs_doca_pipe_create(dev, &match, NULL, &monitor,
                               &actions, &actions, NULL, &fwd, NULL,
                               NETDEV_DOCA_RSS_NUM_ENTRIES * RTE_MAX_ETHPORTS,
                               false, false, UINT64_C(1) << AUX_QUEUE, "RSS",
@@ -206,9 +199,8 @@ netdev_doca_rss_pipe_init(struct netdev *netdev)
 }
 
 static void
-netdev_doca_rss_pipe_uninit(struct netdev *netdev)
+netdev_doca_rss_pipe_uninit(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct netdev_doca_esw_ctx *esw = dev->esw_ctx;
 
     ovs_doca_destroy_pipe(&esw->rss_pipe);
@@ -344,9 +336,8 @@ netdev_doca_stats_name(enum netdev_doca_rss_type type)
 }
 
 static int
-netdev_doca_rss_entries_init(struct netdev *netdev)
+netdev_doca_rss_entries_init(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct netdev_dpdk_common *common = &dev->common;
     struct netdev_doca_esw_ctx *esw = dev->esw_ctx;
     dpdk_port_t port_id = common->port_id;
@@ -385,7 +376,7 @@ netdev_doca_rss_entries_init(struct netdev *netdev)
         match.d.parser_meta.outer_l4_type = match_type.l4_type;
         fwd.rss.outer_flags = netdev_doca_rss_flags(i);
 
-        ret = ovs_doca_add_entry(&common->up, AUX_QUEUE, esw->rss_pipe, &match,
+        ret = ovs_doca_add_entry(dev, AUX_QUEUE, esw->rss_pipe, &match,
                                  &actions, NULL, &fwd,
                                  DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, &entry);
         if (ret != DOCA_SUCCESS) {
@@ -404,9 +395,8 @@ netdev_doca_rss_entries_init(struct netdev *netdev)
 }
 
 static void
-netdev_doca_rss_entries_uninit(struct netdev *netdev)
+netdev_doca_rss_entries_uninit(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct netdev_doca_esw_ctx *esw = dev->esw_ctx;
 
     for (int i = 0; i < NETDEV_DOCA_RSS_NUM_ENTRIES; i++) {
@@ -416,9 +406,8 @@ netdev_doca_rss_entries_uninit(struct netdev *netdev)
 }
 
 static int
-netdev_doca_meta_tag0_pipe_init(struct netdev *netdev)
+netdev_doca_meta_tag0_pipe_init(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct ovs_doca_flow_actions actions_masks;
     struct ovs_doca_flow_actions actions;
     struct ovs_doca_flow_match match;
@@ -434,25 +423,24 @@ netdev_doca_meta_tag0_pipe_init(struct netdev *netdev)
     memset(&actions_masks.d.meta.u32[0], 0xFF,
            sizeof actions_masks.d.meta.u32[0]);
 
-    return ovs_doca_pipe_create(netdev, &match, NULL, NULL, &actions,
+    return ovs_doca_pipe_create(dev, &match, NULL, NULL, &actions,
                                 &actions_masks, NULL, &fwd, NULL, 1, false,
                                 false, UINT64_C(1) << AUX_QUEUE, "META_TAG0",
                                 &dev->esw_ctx->meta_tag0_pipe);
 }
 
 static void
-netdev_doca_meta_tag0_pipe_uninit(struct netdev *netdev)
+netdev_doca_meta_tag0_pipe_uninit(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct netdev_doca_esw_ctx *esw = dev->esw_ctx;
 
     ovs_doca_destroy_pipe(&esw->meta_tag0_pipe);
 }
 
 static int
-netdev_doca_meta_tag0_rule_init(struct netdev *netdev)
+netdev_doca_meta_tag0_rule_init(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
+    struct netdev *netdev = &dev->common.up;
     struct doca_flow_pipe_entry **pentry;
     struct doca_flow_pipe *pipe;
     int ret;
@@ -460,7 +448,7 @@ netdev_doca_meta_tag0_rule_init(struct netdev *netdev)
     pentry = &dev->esw_ctx->meta_tag0_entry;
     pipe = dev->esw_ctx->meta_tag0_pipe;
 
-    ret = ovs_doca_add_entry(netdev, AUX_QUEUE, pipe, NULL, NULL, NULL, NULL,
+    ret = ovs_doca_add_entry(dev, AUX_QUEUE, pipe, NULL, NULL, NULL, NULL,
                              DOCA_FLOW_ENTRY_FLAGS_NO_WAIT, pentry);
     if (ret != DOCA_SUCCESS) {
         VLOG_ERR("%s: Failed to create meta-tag0 rule. Error: %d (%s)",
@@ -471,9 +459,8 @@ netdev_doca_meta_tag0_rule_init(struct netdev *netdev)
 }
 
 static void
-netdev_doca_meta_tag0_rule_uninit(struct netdev *netdev)
+netdev_doca_meta_tag0_rule_uninit(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct netdev_doca_esw_ctx *esw = dev->esw_ctx;
 
     ovs_doca_remove_entry(esw, AUX_QUEUE, DOCA_FLOW_ENTRY_FLAGS_NO_WAIT,
@@ -481,9 +468,9 @@ netdev_doca_meta_tag0_rule_uninit(struct netdev *netdev)
 }
 
 static int
-netdev_doca_pre_miss_pipe_init(struct netdev *netdev)
+netdev_doca_pre_miss_pipe_init(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
+    struct netdev *netdev = &dev->common.up;
     struct ovs_doca_flow_match match = { .d = {
         .parser_meta.outer_l2_type = DOCA_FLOW_L2_META_NO_VLAN,
         .outer.eth.type = UINT16_MAX,
@@ -508,25 +495,24 @@ netdev_doca_pre_miss_pipe_init(struct netdev *netdev)
     fwd.type = DOCA_FLOW_FWD_TARGET;
     fwd.target = kernel_target;
 
-    return ovs_doca_pipe_create(netdev, &match, NULL, NULL, NULL, NULL, NULL,
+    return ovs_doca_pipe_create(dev, &match, NULL, NULL, NULL, NULL, NULL,
                                 &fwd, &miss, PRE_MISS_N_TYPES, false,
                                 false, UINT64_C(1) << AUX_QUEUE, "PRE_MISS",
                                 &dev->esw_ctx->pre_miss_pipe);
 }
 
 static void
-netdev_doca_pre_miss_pipe_uninit(struct netdev *netdev)
+netdev_doca_pre_miss_pipe_uninit(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct netdev_doca_esw_ctx *esw = dev->esw_ctx;
 
     ovs_doca_destroy_pipe(&esw->pre_miss_pipe);
 }
 
 static int
-netdev_doca_pre_miss_rules_init(struct netdev *netdev)
+netdev_doca_pre_miss_rules_init(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
+    struct netdev *netdev = &dev->common.up;
     struct doca_flow_pipe_entry **pentry;
     struct ovs_doca_flow_match match;
     int ret;
@@ -537,7 +523,7 @@ netdev_doca_pre_miss_rules_init(struct netdev *netdev)
         pentry = &dev->esw_ctx->pre_miss_entries[i];
 
         match.d.outer.eth.type = htons(pre_miss_mapping[i]);
-        ret = ovs_doca_add_entry(netdev, AUX_QUEUE,
+        ret = ovs_doca_add_entry(dev, AUX_QUEUE,
                                  dev->esw_ctx->pre_miss_pipe, &match, NULL,
                                  NULL, NULL, DOCA_FLOW_ENTRY_FLAGS_NO_WAIT,
                                  pentry);
@@ -553,9 +539,8 @@ netdev_doca_pre_miss_rules_init(struct netdev *netdev)
 }
 
 static void
-netdev_doca_pre_miss_rules_uninit(struct netdev *netdev)
+netdev_doca_pre_miss_rules_uninit(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct netdev_doca_esw_ctx *esw = dev->esw_ctx;
 
     for (int i = 0; i < PRE_MISS_N_TYPES; i++) {
@@ -565,24 +550,22 @@ netdev_doca_pre_miss_rules_uninit(struct netdev *netdev)
 }
 
 static int
-netdev_doca_root_pipe_init(struct netdev *netdev)
+netdev_doca_root_pipe_init(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct doca_flow_fwd miss;
 
     memset(&miss, 0, sizeof miss);
     miss.type = DOCA_FLOW_FWD_PIPE;
     miss.next_pipe = dev->esw_ctx->pre_miss_pipe;
 
-    return ovs_doca_pipe_create(netdev, NULL, NULL, NULL, NULL, NULL, NULL,
+    return ovs_doca_pipe_create(dev, NULL, NULL, NULL, NULL, NULL, NULL,
                                 NULL, &miss, 0, false, true, 0, "ROOT",
                                 &dev->esw_ctx->root_pipe);
 }
 
 static void
-netdev_doca_root_pipe_uninit(struct netdev *netdev)
+netdev_doca_root_pipe_uninit(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct netdev_doca_esw_ctx *esw = dev->esw_ctx;
 
     ovs_doca_destroy_pipe(&esw->root_pipe);
@@ -606,7 +589,7 @@ netdev_doca_egress_entry_init(struct netdev_doca *dev)
     fwd.type = DOCA_FLOW_FWD_PORT;
     fwd.port_id = port_id;
 
-    ret = ovs_doca_add_entry(&common->up, AUX_QUEUE, pipe, &match, NULL, NULL,
+    ret = ovs_doca_add_entry(dev, AUX_QUEUE, pipe, &match, NULL, NULL,
                              &fwd, DOCA_FLOW_ENTRY_FLAGS_NO_WAIT,
                              &dev->egress_entry);
     if (ret != DOCA_SUCCESS) {
@@ -618,9 +601,8 @@ netdev_doca_egress_entry_init(struct netdev_doca *dev)
 }
 
 static void
-netdev_doca_egress_entry_uninit(struct netdev *netdev)
+netdev_doca_egress_entry_uninit(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct netdev_doca_esw_ctx *esw = dev->esw_ctx;
 
     ovs_doca_remove_entry(esw, AUX_QUEUE, DOCA_FLOW_ENTRY_FLAGS_NO_WAIT,
@@ -628,25 +610,26 @@ netdev_doca_egress_entry_uninit(struct netdev *netdev)
 }
 
 static void
-netdev_doca_slowpath_esw_uninit(struct netdev *netdev)
+netdev_doca_slowpath_esw_uninit(struct netdev_doca *dev)
 {
-    netdev_doca_root_pipe_uninit(netdev);
-    netdev_doca_pre_miss_rules_uninit(netdev);
-    netdev_doca_pre_miss_pipe_uninit(netdev);
-    netdev_doca_meta_tag0_rule_uninit(netdev);
-    netdev_doca_meta_tag0_pipe_uninit(netdev);
-    netdev_doca_rss_pipe_uninit(netdev);
-    netdev_doca_egress_pipe_uninit(netdev);
+    netdev_doca_root_pipe_uninit(dev);
+    netdev_doca_pre_miss_rules_uninit(dev);
+    netdev_doca_pre_miss_pipe_uninit(dev);
+    netdev_doca_meta_tag0_rule_uninit(dev);
+    netdev_doca_meta_tag0_pipe_uninit(dev);
+    netdev_doca_rss_pipe_uninit(dev);
+    netdev_doca_egress_pipe_uninit(dev);
 }
 
 static int
-netdev_doca_slowpath_esw_init(struct netdev *netdev)
+netdev_doca_slowpath_esw_init(struct netdev_doca *dev)
 {
+    struct netdev *netdev = &dev->common.up;
     int rv;
 
 #define ESW_INIT_CMD(func)                                                \
     do {                                                                  \
-        rv = (func)(netdev);                                              \
+        rv = (func)(dev);                                                 \
         if (rv == DOCA_SUCCESS) {                                         \
             break;                                                        \
         }                                                                 \
@@ -668,9 +651,8 @@ netdev_doca_slowpath_esw_init(struct netdev *netdev)
 }
 
 static void
-netdev_doca_esw_port_uninit(struct netdev *netdev)
+netdev_doca_esw_port_uninit(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct netdev_doca_esw_ctx *esw = dev->esw_ctx;
     uint16_t pid;
 
@@ -707,14 +689,14 @@ netdev_doca_esw_port_uninit(struct netdev *netdev)
         }
     }
 
-    netdev_doca_slowpath_esw_uninit(netdev);
+    netdev_doca_slowpath_esw_uninit(dev);
 }
 
 static int
-netdev_doca_esw_init(struct netdev *netdev)
+netdev_doca_esw_init(struct netdev_doca *dev)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct netdev_dpdk_common *common = &dev->common;
+    struct netdev *netdev = &common->up;
     struct netdev_doca_esw_ctx *esw = dev->esw_ctx;
     uint16_t pid;
     int rv;
@@ -724,7 +706,7 @@ netdev_doca_esw_init(struct netdev *netdev)
     esw->port_id = common->port_id;
     esw->n_rxq = netdev->n_rxq;
 
-    rv = netdev_doca_slowpath_esw_init(netdev);
+    rv = netdev_doca_slowpath_esw_init(dev);
     if (rv != DOCA_SUCCESS) {
         return rv;
     }
@@ -777,7 +759,7 @@ netdev_doca_esw_init(struct netdev *netdev)
     return 0;
 
 err:
-    netdev_doca_esw_port_uninit(netdev);
+    netdev_doca_esw_port_uninit(dev);
     return rv;
 }
 
@@ -1089,7 +1071,7 @@ netdev_doca_set_mtu(struct netdev *netdev, int mtu)
 
     ovs_mutex_lock(&common->mutex);
     if (common->requested_mtu != mtu) {
-        if (!netdev_doca_is_esw_mgr(netdev)) {
+        if (!netdev_doca_is_esw_mgr(dev)) {
             VLOG_WARN("%s: setting requested MTU %d is ignored for "
                       "representor", netdev_get_name(netdev), mtu);
             goto out;
@@ -1362,7 +1344,7 @@ netdev_doca_rep_stop(struct netdev_doca *dev)
         return false;
     }
 
-    netdev_doca_port_stop(&common->up);
+    netdev_doca_port_stop(dev);
     netdev_doca_dev_close(dev);
     common->port_id = DPDK_ETH_PORT_ID_INVALID;
     dev->esw_mgr_port_id = DPDK_ETH_PORT_ID_INVALID;
@@ -1372,16 +1354,16 @@ netdev_doca_rep_stop(struct netdev_doca *dev)
 }
 
 static int
-netdev_doca_port_stop(struct netdev *netdev)
+netdev_doca_port_stop(struct netdev_doca *dev)
     OVS_REQUIRES(dpdk_common_mutex)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct netdev_dpdk_common *common = &dev->common;
     bool started = netdev_dpdk_is_started(common);
+    struct netdev *netdev = &common->up;
     int err = 0;
 
     if (started) {
-        if (netdev_doca_get_esw_mgr_port_id(netdev) == common->port_id) {
+        if (netdev_doca_get_esw_mgr_port_id(dev) == common->port_id) {
             netdev_doca_do_foreach_representor(dev, netdev_doca_rep_stop);
         }
 
@@ -1391,11 +1373,11 @@ netdev_doca_port_stop(struct netdev *netdev)
         atomic_store_explicit(&common->started, false, memory_order_release);
     }
 
-    netdev_doca_rss_entries_uninit(netdev);
-    netdev_doca_egress_entry_uninit(netdev);
+    netdev_doca_rss_entries_uninit(dev);
+    netdev_doca_egress_entry_uninit(dev);
 
-    if (netdev_doca_is_esw_mgr(netdev)) {
-        netdev_doca_esw_port_uninit(netdev);
+    if (netdev_doca_is_esw_mgr(dev)) {
+        netdev_doca_esw_port_uninit(dev);
     }
 
     if (dev->port) {
@@ -1403,7 +1385,7 @@ netdev_doca_port_stop(struct netdev *netdev)
         dev->port = NULL;
     }
 
-    if (!netdev_doca_is_esw_mgr(netdev) && dev->dev_rep) {
+    if (!netdev_doca_is_esw_mgr(dev) && dev->dev_rep) {
         VLOG_DBG("%s: Closing doca dev_rep for port_id "DPDK_PORT_ID_FMT
                  ". %p", netdev_get_name(netdev), common->port_id,
                  dev->dev_rep);
@@ -1429,7 +1411,7 @@ common_destruct(struct netdev_doca *dev)
     OVS_REQUIRES(dpdk_common_mutex)
     OVS_EXCLUDED(dev->common.mutex)
 {
-    if (netdev_doca_is_esw_mgr(&dev->common.up)) {
+    if (netdev_doca_is_esw_mgr(dev)) {
         netdev_dpdk_mempool_release(dev->common.dpdk_mp);
     }
 
@@ -1445,7 +1427,7 @@ netdev_doca_destruct(struct netdev *netdev)
 
     ovs_mutex_lock(&dpdk_common_mutex);
 
-    netdev_doca_port_stop(netdev);
+    netdev_doca_port_stop(dev);
 
     if (common->attached) {
         netdev_doca_dev_close(dev);
@@ -1625,7 +1607,7 @@ netdev_doca_mempool_configure(struct netdev_doca *dev)
     struct dpdk_mp *dmp;
     int mtu;
 
-    if (!netdev_doca_is_esw_mgr(&common->up)) {
+    if (!netdev_doca_is_esw_mgr(dev)) {
         struct netdev_doca *esw_dev;
 
         esw_dev = netdev_doca_cast(dev->esw_ctx->esw_netdev);
@@ -1705,7 +1687,7 @@ doca_eth_dev_port_config(struct netdev_doca *dev,
 
     netdev_dpdk_build_port_conf(common, info, &conf);
 
-    if (!netdev_doca_is_esw_mgr(&common->up)) {
+    if (!netdev_doca_is_esw_mgr(dev)) {
         rte_eth_dev_configure(common->port_id, 0, 0, &conf);
         return doca_eth_dev_port_config_complete(dev, n_rxq, n_txq);
     }
@@ -1824,11 +1806,11 @@ out:
 }
 
 static int
-netdev_doca_port_start(struct netdev *netdev)
+netdev_doca_port_start(struct netdev_doca *dev)
     OVS_REQUIRES(dpdk_common_mutex)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct netdev_dpdk_common *common = &dev->common;
+    struct netdev *netdev = &common->up;
     const char *devargs = common->devargs;
     dpdk_port_t port_id = common->port_id;
     struct doca_flow_port_cfg *port_cfg;
@@ -1864,7 +1846,7 @@ netdev_doca_port_start(struct netdev *netdev)
         goto out;
     }
 
-    if (!netdev_doca_is_esw_mgr(netdev)) {
+    if (!netdev_doca_is_esw_mgr(dev)) {
         err = doca_dpdk_open_dev_rep_by_port_id(port_id, esw->dev,
                                                 &dev->dev_rep);
         if (err != DOCA_SUCCESS) {
@@ -1938,7 +1920,7 @@ netdev_doca_port_start(struct netdev *netdev)
     }
 
     if (common->port_id == dev->esw_mgr_port_id) {
-        err = netdev_doca_esw_init(netdev);
+        err = netdev_doca_esw_init(dev);
         if (err != DOCA_SUCCESS) {
             goto out;
         }
@@ -1949,7 +1931,7 @@ netdev_doca_port_start(struct netdev *netdev)
         goto out;
     }
 
-    err = netdev_doca_rss_entries_init(netdev);
+    err = netdev_doca_rss_entries_init(dev);
     if (err != DOCA_SUCCESS) {
         goto out;
     }
@@ -1957,7 +1939,7 @@ netdev_doca_port_start(struct netdev *netdev)
 out:
     doca_flow_port_cfg_destroy(port_cfg);
     if (err != DOCA_SUCCESS) {
-        netdev_doca_port_stop(netdev);
+        netdev_doca_port_stop(dev);
     }
 
     return err;
@@ -2007,7 +1989,7 @@ doca_eth_dev_init(struct netdev_doca *dev)
     }
 
     common->attached = true;
-    diag = netdev_doca_port_start(netdev);
+    diag = netdev_doca_port_start(dev);
     if (diag != DOCA_SUCCESS) {
         VLOG_ERR("Failed to init DOCA port %s port_id "DPDK_PORT_ID_FMT
                  ". Error: %d (%s)", netdev_get_name(netdev),
@@ -2031,7 +2013,7 @@ doca_eth_dev_init(struct netdev_doca *dev)
     }
 
     /* Upon success of esw_mgr port, update the representor's field of it. */
-    if (netdev_doca_get_esw_mgr_port_id(netdev) == common->port_id) {
+    if (netdev_doca_get_esw_mgr_port_id(dev) == common->port_id) {
         netdev_doca_do_foreach_representor(dev, netdev_doca_rep_reconfigure);
     }
 
@@ -2047,8 +2029,8 @@ netdev_doca_reconfigure(struct netdev *netdev)
 
     /* If an ESW manager is not attached to OVS, a representor cannot be
      * configured. */
-    if (!netdev_doca_is_esw_mgr(netdev) &&
-        netdev_doca_get_esw_mgr_port_id(netdev) ==
+    if (!netdev_doca_is_esw_mgr(dev) &&
+        netdev_doca_get_esw_mgr_port_id(dev) ==
         DPDK_ETH_PORT_ID_INVALID) {
         return EOPNOTSUPP;
     }
@@ -2071,7 +2053,7 @@ netdev_doca_reconfigure(struct netdev *netdev)
         goto out;
     }
 
-    netdev_doca_port_stop(netdev);
+    netdev_doca_port_stop(dev);
 
     err = netdev_doca_mempool_configure(dev);
     if (err) {
@@ -2082,7 +2064,7 @@ netdev_doca_reconfigure(struct netdev *netdev)
 
     netdev->n_txq = common->requested_n_txq;
     netdev->n_rxq = common->requested_n_rxq;
-    if (!netdev_doca_is_esw_mgr(netdev)) {
+    if (!netdev_doca_is_esw_mgr(dev)) {
         int esw_n_rxq;
 
         esw_n_rxq = dev->esw_ctx->n_rxq;
@@ -2638,8 +2620,8 @@ netdev_doca_send(struct netdev *netdev, int qid,
                  struct dp_packet_batch *batch, bool concurrent_txq)
 {
     struct rte_mbuf **pkts = (struct rte_mbuf **) batch->packets;
-    uint32_t port_id_meta = netdev_doca_get_port_id(netdev);
     struct netdev_doca *dev = netdev_doca_cast(netdev);
+    uint32_t port_id_meta = netdev_doca_get_port_id(dev);
     struct netdev_dpdk_common *common = &dev->common;
     int batch_cnt = dp_packet_batch_size(batch);
     struct netdev_dpdk_sw_stats stats;

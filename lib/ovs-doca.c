@@ -563,7 +563,7 @@ ovs_doca_add_generic(unsigned int qid,
 }
 
 doca_error_t
-ovs_doca_add_entry(struct netdev *netdev,
+ovs_doca_add_entry(struct netdev_doca *dev,
                    unsigned int qid,
                    struct doca_flow_pipe *pipe,
                    const struct ovs_doca_flow_match *match,
@@ -573,7 +573,7 @@ ovs_doca_add_entry(struct netdev *netdev,
                    uint32_t flags,
                    struct doca_flow_pipe_entry **pentry)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
+    struct netdev *netdev = &dev->common.up;
     struct netdev_doca_esw_ctx *esw = dev->esw_ctx;
     doca_error_t err;
 
@@ -601,7 +601,7 @@ ovs_doca_add_entry(struct netdev *netdev,
 }
 
 doca_error_t
-ovs_doca_add_entry_hash(struct netdev *netdev,
+ovs_doca_add_entry_hash(struct netdev_doca *dev,
                         unsigned int qid,
                         struct doca_flow_pipe *pipe,
                         uint32_t index,
@@ -611,7 +611,7 @@ ovs_doca_add_entry_hash(struct netdev *netdev,
                         uint32_t flags,
                         struct doca_flow_pipe_entry **pentry)
 {
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
+    struct netdev *netdev = &dev->common.up;
     struct netdev_doca_esw_ctx *esw = dev->esw_ctx;
     doca_error_t err;
 
@@ -705,7 +705,7 @@ ovs_doca_destroy_pipe(struct doca_flow_pipe **ppipe)
 }
 
 doca_error_t
-ovs_doca_pipe_create(struct netdev *netdev,
+ovs_doca_pipe_create(struct netdev_doca *dev,
                      struct ovs_doca_flow_match *match,
                      struct ovs_doca_flow_match *match_mask,
                      struct doca_flow_monitor *monitor,
@@ -721,9 +721,9 @@ ovs_doca_pipe_create(struct netdev *netdev,
                      struct doca_flow_pipe **pipe)
 {
     struct doca_flow_actions *actions_arr[1], *actions_masks_arr[1];
-    struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct doca_flow_action_descs descs, *descs_arr[1];
     char pipe_name[OVS_DOCA_MAX_PIPE_NAME_LEN];
+    struct netdev *netdev = &dev->common.up;
     struct doca_flow_port *doca_port;
     struct doca_flow_pipe_cfg *cfg;
     int ret;

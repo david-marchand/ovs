@@ -35,6 +35,7 @@
 
 #define OVS_DOCA_MAX_PIPE_NAME_LEN 32
 
+struct netdev_doca;
 struct netdev_doca_esw_ctx;
 
 struct ovs_doca_steering_queue {
@@ -54,7 +55,7 @@ struct ovs_doca_flow_match {
 };
 BUILD_ASSERT_DECL(offsetof(struct ovs_doca_flow_match, d) == 0);
 
-doca_error_t ovs_doca_add_entry(struct netdev *,
+doca_error_t ovs_doca_add_entry(struct netdev_doca *,
                                 unsigned int qid,
                                 struct doca_flow_pipe *,
                                 const struct ovs_doca_flow_match *,
@@ -64,7 +65,7 @@ doca_error_t ovs_doca_add_entry(struct netdev *,
                                 uint32_t flags,
                                 struct doca_flow_pipe_entry **pentry);
 
-doca_error_t ovs_doca_add_entry_hash(struct netdev *,
+doca_error_t ovs_doca_add_entry_hash(struct netdev_doca *,
                                      unsigned int qid,
                                      struct doca_flow_pipe *,
                                      uint32_t index,
@@ -80,7 +81,7 @@ doca_error_t ovs_doca_remove_entry(struct netdev_doca_esw_ctx *esw,
 
 void ovs_doca_destroy_pipe(struct doca_flow_pipe **ppipe);
 
-doca_error_t ovs_doca_pipe_create(struct netdev *netdev,
+doca_error_t ovs_doca_pipe_create(struct netdev_doca *dev,
                                   struct ovs_doca_flow_match *ovs_match,
                                   struct ovs_doca_flow_match *ovs_match_mask,
                                   struct doca_flow_monitor *,
