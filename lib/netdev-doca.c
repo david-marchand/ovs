@@ -1407,19 +1407,6 @@ netdev_doca_port_stop(struct netdev_doca *dev)
 }
 
 static void
-common_destruct(struct netdev_doca *dev)
-    OVS_REQUIRES(dpdk_common_mutex)
-    OVS_EXCLUDED(dev->common.mutex)
-{
-    if (netdev_doca_is_esw_mgr(dev)) {
-        netdev_dpdk_mempool_release(dev->common.dpdk_mp);
-    }
-
-    free(dev->sw_tx_stats);
-    netdev_dpdk_common_destruct(&dev->common);
-}
-
-static void
 netdev_doca_destruct(struct netdev *netdev)
 {
     struct netdev_doca *dev = netdev_doca_cast(netdev);
@@ -1437,7 +1424,14 @@ netdev_doca_destruct(struct netdev *netdev)
                   common->devargs);
     }
 
-    common_destruct(dev);
+    if (netdev_doca_is_esw_mgr(dev)) {
+        netdev_dpdk_mempool_release(dev->common.dpdk_mp);
+    }
+
+    free(dev->sw_tx_stats);
+    free(dev->peer_name);
+    free(dev->devargs);
+    netdev_dpdk_common_destruct(&dev->common);
 
     ovs_mutex_unlock(&dpdk_common_mutex);
 }
@@ -2124,30 +2118,17 @@ out:
 }
 
 static int
-common_construct(struct netdev *netdev, dpdk_port_t port_no, int socket_id)
-    OVS_REQUIRES(dpdk_common_mutex)
+netdev_doca_construct(struct netdev *netdev)
 {
     struct netdev_doca *dev = netdev_doca_cast(netdev);
     int err;
 
+    ovs_mutex_lock(&dpdk_common_mutex);
     err = netdev_dpdk_common_construct(&dev->common, &doca_list, port_no,
                                        socket_id, UINT64_MAX);
-    if (err) {
-        return err;
+    if (!err) {
+        dev->esw_mgr_port_id = port_no;
     }
-
-    dev->esw_mgr_port_id = port_no;
-
-    return 0;
-}
-
-static int
-netdev_doca_construct(struct netdev *netdev)
-{
-    int err;
-
-    ovs_mutex_lock(&dpdk_common_mutex);
-    err = common_construct(netdev, DPDK_ETH_PORT_ID_INVALID, SOCKET0);
     ovs_mutex_unlock(&dpdk_common_mutex);
 
     return err;
