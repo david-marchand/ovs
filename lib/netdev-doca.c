@@ -98,35 +98,6 @@ static int
 netdev_doca_port_stop(struct netdev_doca *)
     OVS_REQUIRES(dpdk_common_mutex);
 
-static dpdk_port_t
-netdev_doca_get_esw_mgr_port_id(const struct netdev_doca *dev)
-{
-    if (!rte_eth_dev_is_valid_port(dev->common.port_id) ||
-        !rte_eth_dev_is_valid_port(dev->esw_mgr_port_id)) {
-        return DPDK_ETH_PORT_ID_INVALID;
-    }
-
-    return dev->esw_mgr_port_id;
-}
-
-static dpdk_port_t
-netdev_doca_get_port_id(const struct netdev_doca *dev)
-{
-    if (!rte_eth_dev_is_valid_port(dev->common.port_id)) {
-        return DPDK_ETH_PORT_ID_INVALID;
-    }
-
-    return dev->common.port_id;
-}
-
-static bool
-netdev_doca_is_esw_mgr(const struct netdev_doca *dev)
-{
-    dpdk_port_t esw_mgr_id = netdev_doca_get_esw_mgr_port_id(dev);
-
-    return esw_mgr_id == netdev_doca_get_port_id(dev) &&
-           esw_mgr_id != DPDK_ETH_PORT_ID_INVALID;
-}
 
 static int
 netdev_doca_egress_pipe_init(struct netdev_doca *dev)
@@ -1071,7 +1042,7 @@ netdev_doca_set_mtu(struct netdev *netdev, int mtu)
 
     ovs_mutex_lock(&common->mutex);
     if (common->requested_mtu != mtu) {
-        if (!netdev_doca_is_esw_mgr(dev)) {
+        if (common->is_representor) {
             VLOG_WARN("%s: setting requested MTU %d is ignored for "
                       "representor", netdev_get_name(netdev), mtu);
             goto out;
@@ -1363,7 +1334,7 @@ netdev_doca_port_stop(struct netdev_doca *dev)
     int err = 0;
 
     if (started) {
-        if (netdev_doca_get_esw_mgr_port_id(dev) == common->port_id) {
+        if (!common->is_representor) {
             netdev_doca_do_foreach_representor(dev, netdev_doca_rep_stop);
         }
 
@@ -1376,7 +1347,7 @@ netdev_doca_port_stop(struct netdev_doca *dev)
     netdev_doca_rss_entries_uninit(dev);
     netdev_doca_egress_entry_uninit(dev);
 
-    if (netdev_doca_is_esw_mgr(dev)) {
+    if (!common->is_representor) {
         netdev_doca_esw_port_uninit(dev);
     }
 
@@ -1385,7 +1356,7 @@ netdev_doca_port_stop(struct netdev_doca *dev)
         dev->port = NULL;
     }
 
-    if (!netdev_doca_is_esw_mgr(dev) && dev->dev_rep) {
+    if (common->is_representor && dev->dev_rep) {
         VLOG_DBG("%s: Closing doca dev_rep for port_id "DPDK_PORT_ID_FMT
                  ". %p", netdev_get_name(netdev), common->port_id,
                  dev->dev_rep);
@@ -1424,7 +1395,7 @@ netdev_doca_destruct(struct netdev *netdev)
                   common->devargs);
     }
 
-    if (netdev_doca_is_esw_mgr(dev)) {
+    if (!dev->common.is_representor) {
         netdev_dpdk_mempool_release(dev->common.dpdk_mp);
     }
 
@@ -1601,7 +1572,7 @@ netdev_doca_mempool_configure(struct netdev_doca *dev)
     struct dpdk_mp *dmp;
     int mtu;
 
-    if (!netdev_doca_is_esw_mgr(dev)) {
+    if (common->is_representor) {
         struct netdev_doca *esw_dev;
 
         esw_dev = netdev_doca_cast(dev->esw_ctx->esw_netdev);
@@ -1681,7 +1652,7 @@ doca_eth_dev_port_config(struct netdev_doca *dev,
 
     netdev_dpdk_build_port_conf(common, info, &conf);
 
-    if (!netdev_doca_is_esw_mgr(dev)) {
+    if (common->is_representor) {
         rte_eth_dev_configure(common->port_id, 0, 0, &conf);
         return doca_eth_dev_port_config_complete(dev, n_rxq, n_txq);
     }
@@ -1840,7 +1811,7 @@ netdev_doca_port_start(struct netdev_doca *dev)
         goto out;
     }
 
-    if (!netdev_doca_is_esw_mgr(dev)) {
+    if (common->is_representor) {
         err = doca_dpdk_open_dev_rep_by_port_id(port_id, esw->dev,
                                                 &dev->dev_rep);
         if (err != DOCA_SUCCESS) {
@@ -1873,7 +1844,7 @@ netdev_doca_port_start(struct netdev_doca *dev)
     VLOG_INFO("%s: Starting '%s', port_id="DPDK_PORT_ID_FMT,
               netdev_get_name(netdev), devargs, port_id);
 
-    if (common->port_id == dev->esw_mgr_port_id) {
+    if (!common->is_representor) {
         err = doca_flow_port_cfg_set_actions_mem_size(
                 port_cfg, NETDEV_DOCA_ACTIONS_MEM_SIZE);
         if (err != DOCA_SUCCESS) {
@@ -1913,7 +1884,7 @@ netdev_doca_port_start(struct netdev_doca *dev)
         goto out;
     }
 
-    if (common->port_id == dev->esw_mgr_port_id) {
+    if (!common->is_representor) {
         err = netdev_doca_esw_init(dev);
         if (err != DOCA_SUCCESS) {
             goto out;
@@ -2007,7 +1978,7 @@ doca_eth_dev_init(struct netdev_doca *dev)
     }
 
     /* Upon success of esw_mgr port, update the representor's field of it. */
-    if (netdev_doca_get_esw_mgr_port_id(dev) == common->port_id) {
+    if (!common->is_representor) {
         netdev_doca_do_foreach_representor(dev, netdev_doca_rep_reconfigure);
     }
 
@@ -2023,9 +1994,8 @@ netdev_doca_reconfigure(struct netdev *netdev)
 
     /* If an ESW manager is not attached to OVS, a representor cannot be
      * configured. */
-    if (!netdev_doca_is_esw_mgr(dev) &&
-        netdev_doca_get_esw_mgr_port_id(dev) ==
-        DPDK_ETH_PORT_ID_INVALID) {
+    if (common->is_representor &&
+        !rte_eth_dev_is_valid_port(dev->esw_mgr_port_id)) {
         return EOPNOTSUPP;
     }
 
@@ -2058,7 +2028,7 @@ netdev_doca_reconfigure(struct netdev *netdev)
 
     netdev->n_txq = common->requested_n_txq;
     netdev->n_rxq = common->requested_n_rxq;
-    if (!netdev_doca_is_esw_mgr(dev)) {
+    if (common->is_representor) {
         int esw_n_rxq;
 
         esw_n_rxq = dev->esw_ctx->n_rxq;
@@ -2536,7 +2506,6 @@ netdev_doca_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
     struct netdev_doca *dev = netdev_doca_cast(rxq->netdev);
     struct netdev_dpdk_common *common = &dev->common;
     struct netdev_doca_port_queue *pq;
-    dpdk_port_t esw_mgr_port_id;
     dpdk_port_t port_id;
     uint64_t old_count;
     int nb_rx;
@@ -2546,15 +2515,14 @@ netdev_doca_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
         return EAGAIN;
     }
 
-    esw_mgr_port_id = dev->esw_ctx->port_id;
     port_id = common->port_id;
 
-    if (port_id == esw_mgr_port_id) {
+    if (!common->is_representor) {
         struct dp_packet_batch rx_batch;
 
         dp_packet_batch_init(&rx_batch);
         rx_batch.count =
-            rte_eth_rx_burst(esw_mgr_port_id, rxq->queue_id,
+            rte_eth_rx_burst(port_id, rxq->queue_id,
                              (struct rte_mbuf **) rx_batch.packets,
                              NETDEV_MAX_BURST);
         if (rx_batch.count == 0) {
@@ -2602,8 +2570,8 @@ netdev_doca_send(struct netdev *netdev, int qid,
 {
     struct rte_mbuf **pkts = (struct rte_mbuf **) batch->packets;
     struct netdev_doca *dev = netdev_doca_cast(netdev);
-    uint32_t port_id_meta = netdev_doca_get_port_id(dev);
     struct netdev_dpdk_common *common = &dev->common;
+    uint32_t port_id_meta = common->port_id;
     int batch_cnt = dp_packet_batch_size(batch);
     struct netdev_dpdk_sw_stats stats;
     struct dp_packet *packet;
