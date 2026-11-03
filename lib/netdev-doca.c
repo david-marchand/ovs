@@ -1403,27 +1403,31 @@ netdev_doca_destruct(struct netdev *netdev)
     ovs_mutex_destroy(&dev->mutex);
 }
 
-static int
+static void
 netdev_doca_get_sw_custom_stats(const struct netdev *netdev,
                                 struct netdev_custom_stats *custom_stats)
 {
     struct netdev_doca *dev = netdev_doca_cast(netdev);
     struct netdev_dpdk_common *common = &dev->common;
-    int i, n;
+    int stat_offset, i, n;
 
 #define SW_CSTATS                    \
     SW_CSTAT(tx_failure_drops)
 
+    stat_offset = custom_stats->size;
+
 #define SW_CSTAT(NAME) + 1
-    custom_stats->size = SW_CSTATS;
+    custom_stats->size += SW_CSTATS;
 #undef SW_CSTAT
-    custom_stats->counters = xcalloc(custom_stats->size,
-                                     sizeof *custom_stats->counters);
+
+    custom_stats->counters = xrealloc(custom_stats->counters,
+                                      custom_stats->size *
+                                      sizeof *custom_stats->counters);
 
     ovs_mutex_lock(&dev->mutex);
 
     rte_spinlock_lock(&common->stats_lock);
-    i = 0;
+    i = stat_offset;
 #define SW_CSTAT(NAME) \
     custom_stats->counters[i++].value = common->sw_stats->NAME;
     SW_CSTATS;
@@ -1432,8 +1436,8 @@ netdev_doca_get_sw_custom_stats(const struct netdev *netdev,
 
     ovs_mutex_unlock(&dev->mutex);
 
-    i = 0;
-    n = 0;
+    i = stat_offset;
+    n = stat_offset;
 #define SW_CSTAT(NAME) \
     if (custom_stats->counters[i].value != UINT64_MAX) {                   \
         ovs_strlcpy(custom_stats->counters[n].name,                        \
@@ -1446,7 +1450,6 @@ netdev_doca_get_sw_custom_stats(const struct netdev *netdev,
 #undef SW_CSTAT
 
     custom_stats->size = n;
-    return 0;
 }
 
 static int
@@ -1471,6 +1474,10 @@ netdev_doca_get_custom_stats(const struct netdev *netdev,
 
     if (!netdev_doca_is_started(dev)) {
         return EAGAIN;
+    }
+
+    if (!dev->is_representor) {
+        netdev_get_custom_stats(&dev->esw_eth->common.up, custom_stats);
     }
 
     netdev_doca_get_sw_custom_stats(netdev, custom_stats);
