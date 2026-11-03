@@ -40,7 +40,6 @@
 #include <doca_flow.h>
 #include <doca_rdma_bridge.h>
 
-#include "coverage.h"
 #include "dp-packet.h"
 #include "dpif-netdev.h"
 #include "netdev-provider.h"
@@ -56,10 +55,6 @@
 
 VLOG_DEFINE_THIS_MODULE(netdev_doca);
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 20);
-
-COVERAGE_DEFINE(netdev_doca_rx_drop_invalid_port);
-COVERAGE_DEFINE(netdev_doca_rx_drop_no_mark);
-COVERAGE_DEFINE(netdev_doca_rx_drop_ring_full);
 
 #define NETDEV_DOCA_MAX_MEGAFLOWS_COUNTERS (1 << 19)
 #define NETDEV_DOCA_ACTIONS_MEM_SIZE \
@@ -2352,41 +2347,48 @@ out:
 }
 
 static void
-dispatch_rx_packets_by_port(struct dp_packet_batch *rx_batch,
-                            struct netdev_doca_port_queue
-                                *pq[RTE_MAX_ETHPORTS],
-                            uint16_t queue_id)
+netdev_doca_dispatch_rx(struct netdev_doca *dev, uint16_t queue_id,
+                        struct dp_packet_batch *rx_batch)
 {
+    struct netdev_doca_port_queue **pq = dev->esw_ctx->port_queues;
+    struct netdev_dpdk_common *common = &dev->common;
     struct dp_packet *pkt;
     uint64_t old_count;
     uint32_t pkt_size;
     uint32_t port_id;
+    int dropped = 0;
     int rv;
 
     DP_PACKET_BATCH_FOR_EACH (i, pkt, rx_batch) {
         if (!dp_packet_has_flow_mark(pkt, &port_id)) {
-            COVERAGE_INC(netdev_doca_rx_drop_no_mark);
             dp_packet_delete(pkt);
+            dropped++;
             continue;
         }
 
         pkt->has_mark = false;
         if (!rte_eth_dev_is_valid_port(port_id)) {
-            COVERAGE_INC(netdev_doca_rx_drop_invalid_port);
             dp_packet_delete(pkt);
+            dropped++;
             continue;
         }
 
         pkt_size = dp_packet_size(pkt);
         rv = rte_ring_sp_enqueue(pq[port_id][queue_id].ring, pkt);
         if (rv) {
-            COVERAGE_INC(netdev_doca_rx_drop_ring_full);
             dp_packet_delete(pkt);
+            dropped++;
             continue;
         }
 
         atomic_add_relaxed(&pq[port_id][queue_id].n_bytes, pkt_size,
                            &old_count);
+    }
+
+    if (OVS_UNLIKELY(dropped)) {
+        rte_spinlock_lock(&common->stats_lock);
+        common->stats.rx_dropped += dropped;
+        rte_spinlock_unlock(&common->stats_lock);
     }
 }
 
@@ -2417,8 +2419,7 @@ netdev_doca_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
             return EAGAIN;
         }
 
-        dispatch_rx_packets_by_port(&rx_batch, dev->esw_ctx->port_queues,
-                                    rxq->queue_id);
+        netdev_doca_dispatch_rx(dev, rxq->queue_id, &rx_batch);
     }
 
     pq = &dev->esw_ctx->port_queues[port_id][rxq->queue_id];
@@ -2617,7 +2618,15 @@ netdev_doca_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
     }
 
     if (!dev->is_representor) {
-        return netdev_get_stats(&dev->esw_eth->common.up, stats);
+        int err = netdev_get_stats(&dev->esw_eth->common.up, stats);
+
+        if (!err) {
+            rte_spinlock_lock(&common->stats_lock);
+            stats->tx_dropped += common->stats.tx_dropped;
+            stats->rx_dropped += common->stats.rx_dropped;
+            rte_spinlock_unlock(&common->stats_lock);
+        }
+        return err;
     }
 
     memset(stats, 0, sizeof *stats);
