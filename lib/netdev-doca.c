@@ -2388,6 +2388,7 @@ netdev_doca_dispatch_rx(struct netdev_doca *dev, uint16_t queue_id,
             continue;
         }
 
+        atomic_add_relaxed(&pq[port_id][queue_id].n_packets, 1, &old_count);
         atomic_add_relaxed(&pq[port_id][queue_id].n_bytes, pkt_size,
                            &old_count);
     }
@@ -2407,7 +2408,6 @@ netdev_doca_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
     struct netdev_dpdk_common *common = &dev->common;
     struct netdev_doca_port_queue *pq;
     dpdk_port_t port_id;
-    uint64_t old_count;
     int nb_rx;
 
     if (OVS_UNLIKELY(!(common->flags & NETDEV_UP) ||
@@ -2433,8 +2433,6 @@ netdev_doca_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
     batch->count =
         rte_ring_sc_dequeue_burst(pq->ring, (void **) batch->packets,
                                   NETDEV_MAX_BURST, NULL);
-    atomic_add_relaxed(&pq->n_packets, batch->count, &old_count);
-
     nb_rx = batch->count;
 
     if (!nb_rx) {
@@ -2497,8 +2495,7 @@ netdev_doca_send(struct netdev *netdev, int qid,
         n_bytes += dp_packet_size(packet);
     }
 
-    atomic_add_relaxed(&dev->sw_tx_stats[qid].n_packets, batch->count,
-                       &old_count);
+    atomic_add_relaxed(&dev->sw_tx_stats[qid].n_packets, cnt, &old_count);
     atomic_add_relaxed(&dev->sw_tx_stats[qid].n_bytes, n_bytes, &old_count);
 
     dropped = netdev_dpdk_eth_tx_burst(dev->esw_eth, qid, pkts, cnt);
