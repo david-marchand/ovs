@@ -460,7 +460,6 @@ struct netdev_dpdk {
         /* 1 pad bytes here. */
         int mtu;
         int socket_id;
-        int buf_size;
         int max_packet_len;
         enum netdev_flags flags;
         int link_reset_cnt;
@@ -1303,7 +1302,6 @@ static int
 dpdk_eth_dev_init(struct netdev_dpdk *dev)
     OVS_REQUIRES(dev->mutex)
 {
-    struct rte_pktmbuf_pool_private *mbp_priv;
     struct rte_eth_dev_info info;
     struct rte_ether_addr eth_addr;
     int diag;
@@ -1459,8 +1457,6 @@ dpdk_eth_dev_init(struct netdev_dpdk *dev)
         memset(&dev->link, 0, sizeof dev->link);
     }
 
-    mbp_priv = rte_mempool_get_priv(dev->dpdk_mp->mp);
-    dev->buf_size = mbp_priv->mbuf_data_room_size - RTE_PKTMBUF_HEADROOM;
     return 0;
 }
 
