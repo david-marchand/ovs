@@ -889,10 +889,31 @@ dpdk_mp_create(struct netdev_dpdk *dev, int mtu)
     return NULL;
 }
 
+/* Tracks the mempool wrapped by 'dmp' in dpdk_mp_list.
+ * If the mempool is already tracked, drops 'dmp' and returns the existing
+ * entry with its refcount incremented. */
+static struct dpdk_mp *
+dpdk_mp_track(struct dpdk_mp *dmp)
+    OVS_REQUIRES(dpdk_mp_mutex)
+{
+    struct dpdk_mp *next;
+
+    LIST_FOR_EACH (next, list_node, &dpdk_mp_list) {
+        if (dmp->mp == next->mp) {
+            rte_free(dmp);
+            next->refcount++;
+            return next;
+        }
+    }
+
+    ovs_list_push_back(&dpdk_mp_list, &dmp->list_node);
+    return dmp;
+}
+
 static struct dpdk_mp *
 dpdk_mp_get(struct netdev_dpdk *dev, int mtu)
 {
-    struct dpdk_mp *dmp = NULL, *next;
+    struct dpdk_mp *dmp = NULL;
     bool reuse = false;
 
     ovs_mutex_lock(&dpdk_mp_mutex);
@@ -919,25 +940,11 @@ dpdk_mp_get(struct netdev_dpdk *dev, int mtu)
     if (!reuse) {
         dmp = dpdk_mp_create(dev, mtu);
         if (dmp) {
-            /* Shared memory will hit the reuse case above so will not
-             * request a mempool that already exists but we need to check
-             * for the EEXIST case for per port memory case. Compare the
-             * mempool returned by dmp to each entry in dpdk_mp_list. If a
-             * match is found, free dmp as a new entry is not required, set
-             * dmp to point to the existing entry and increment the refcount
-             * to avoid being freed at a later stage.
-             */
-            if (per_port_memory && rte_errno == EEXIST) {
-                LIST_FOR_EACH (next, list_node, &dpdk_mp_list) {
-                    if (dmp->mp == next->mp) {
-                        rte_free(dmp);
-                        dmp = next;
-                        dmp->refcount++;
-                    }
-                }
-            } else {
-                ovs_list_push_back(&dpdk_mp_list, &dmp->list_node);
-            }
+            /* In per port memory mode, a port reconfigured with the same
+             * parameters gets the already existing mempool back from
+             * dpdk_mp_create().  Deduplicate with the entry already
+             * tracking this mempool, if any. */
+            dmp = dpdk_mp_track(dmp);
         }
     }
 
