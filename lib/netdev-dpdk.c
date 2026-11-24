@@ -5622,7 +5622,7 @@ netdev_dpdk_get_queue_stats(const struct netdev *netdev, uint32_t queue_id,
 
     qos_conf = ovsrcu_get_protected(struct qos_conf *, &dev->qos_conf);
     if (qos_conf && qos_conf->ops && qos_conf->ops->qos_queue_get_stats) {
-        qos_conf->ops->qos_queue_get_stats(qos_conf, queue_id, stats);
+        error = qos_conf->ops->qos_queue_get_stats(qos_conf, queue_id, stats);
     } else {
         error = EOPNOTSUPP;
     }
